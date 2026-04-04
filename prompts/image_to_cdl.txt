@@ -1,0 +1,119 @@
+Your task is to translate a geometric diagram into a standardized formal logic language called Condition Declaration Language (CDL).
+
+First, determine if the image is actually a geometric figure (diagram, graph, shape, figure, etc.) or if it is decorative art, irrelevant text, a photo, or other non-geometric content.
+If it is not a geometric figure, set "is_geometric" to false and use Unknown accordingly.
+You must describe the problem using ONLY the predicates defined below.
+- Do not invent new predicates.
+- Do not focus on the goal of the problem, only describe the geometric figure.
+- When describing the figure, only use information that is covered in the problem statement or that should be inferred from the image
+(i.e if the image looks like a square but it is described as a parallelogram in the statement, it should also be described as such).
+
+## Shape & Entity Declarations
+
+2D Shapes:
+Point(A): Declares a point A.
+Line(A, B): Declares a line segment between A and B.
+Angle(A, B, C): Declares an angle with vertex B.
+Triangle(A, B, C): Declares a triangle formed by A, B, and C.
+Parallelogram(J, K, L, M): Declares a parallelogram.
+Square(A, B, C, D): Declares a square.
+Circle(K): Declares a circle with center K.
+Arc(M, N): Declares an arc between points M and N.
+Centoid(Triangle(A, B, C), G): G is the centoid of the triangle ABC.
+
+3D Shapes:
+Pyramid(A, B, C, D): Declares a triangular pyramid (tetrahedron) with base triangle ABC and apex D.
+RectangularPyramid(A, B, C, D, E): Declares a rectangular pyramid with base ABCD and apex E.
+Cube(A, B, C, D, E, F, G, H): Declares a cube with vertices A-H.
+Sphere(K): Declares a sphere with center K.
+Cylinder(K): Declares a cylinder (K is the center of one base).
+Cone(K): Declares a cone (K is the center of the base).
+
+## Structural Relations
+
+PointOnLine(D, Line(A, C)): Point D is on the line segment AC.
+PointOnCircle(M, Circle(K)): Point M is on the circumference of circle K.
+PointOnSphere(M, Sphere(K)): Point M is on the surface of sphere K.
+Parallel(Line(A, B), Line(C, D)): Line AB is parallel to line CD.
+Perpendicular(Line(B, D), Line(A, D)): Line BD is perpendicular to line AD.
+IsCentreOfCircle(O, Circle(O)): Point O is the center of the circle.
+IsCentreOfSphere(O, Sphere(O)): Point O is the center of the sphere.
+Congruent(Triangle(A, B, C), Triangle(D, E, F)): The two triangles are congruent.
+Congruent(Angle(A, B, C), Angle(D, E, F)): The two angles are congruent (equal measure).
+Similar(Triangle(A, B, C), Triangle(D, E, F)): The triangles share the same angles.
+Bisector(Line(B, M), Angle(A, B, C)): Line BM bisects angle ABC.
+Midpoint(M, Line(A, B)): M is the midpoint of line AB.
+Circumcircle(Circle(K), Triangle(A, B, C)): Circle K passes through triangle ABC vertices.
+Altitude(Line(A, D), Triangle(A, B, C)): Line AD is an altitude of triangle ABC (perpendicular to BC).
+TangentTo(Line(M, N), Circle(K)): Line MN is tangent to circle K.
+IsParallelToPlane(Triangle(A, B, C), Plane(P, Q, R)): A face is parallel to a plane.
+
+## Semantic Measurements
+
+Equals(LengthOf(Line(M, N)), 16): The length of line MN is 16.
+Equals(LengthOf(Line(C, D)), x): The length of line CD is the variable x.
+Equals(MeasureOf(Angle(C, A, B)), 54): Angle CAB is 54 degrees.
+Equals(MeasureOf(Arc(M, N)), 98): The arc MN is 98 degrees.
+Equals(PerimeterOf(Triangle(A, B, C)), 40): The perimeter is 40.
+Equals(AreaOf(Square(A, B, C, D)), 100): The area is 100.
+Equals(VolumeOf(Cube(A, B, C, D, E, F, G, H)), 27): The volume is 27.
+Equals(VolumeOf(Sphere(K)), 100): The volume is 100.
+Equals(AreaOf(Triangle(A, B, C)), 20): The area of the triangle is 20.
+Equals(SurfaceAreaOf(Pyramid(A, B, C, D)), 50): The surface area is 50.
+EqualsRatio(LengthOf(Line(A, B)), LengthOf(Line(C, D)), 2): AB / CD = 2 (AB is twice CD).
+EqualsRatio(LengthOf(Line(A, D)), LengthOf(Line(A, B)), 3): AD / AB = 3.
+EqualsRatio(MeasureOf(Angle(A, B, C)), MeasureOf(Angle(D, E, F)), 2): Angle ABC is twice angle DEF.
+
+## Handling Unknown/Unrepresentable Content
+
+If part of the diagram or problem cannot be represented using the predicates above, use the `Unknown` marker.
+
+Unknown(reason): Indicates something that cannot be represented.
+
+## Output Format
+
+Return your response as a JSON object:
+- "image_index": the index of the image
+- "is_geometric": true if the image is a geometric figure, false otherwise
+- "description": CDL description or Unknown(reason)
+- "is_complete": true if fully representable, false otherwise
+
+## Examples
+
+Example 1 - Triangle with angle bisector:
+
+Problem statement: In triangle ABC, angle A measures 120 degrees, AB = 42 cm, AC = 56 cm. The line AD is the bisector of angle A, where D lies on segment BC. Find the length of segment AD.
+
+Image description: Triangle ABC with vertex A at the top, base BC horizontal at the bottom. A point D is marked on BC. A line from A to D splits angle BAC in half. Additional lines are drawn: from D parallel to AC meeting AB at F, and from D parallel to AB meeting AC at E.
+
+Expected CDL output:
+Triangle(A, B, C)
+Equals(MeasureOf(Angle(B, A, C)), 120)
+Equals(LengthOf(Line(A, B)), 42)
+Equals(LengthOf(Line(A, C)), 56)
+PointOnLine(D, Line(B, C))
+Bisector(Line(A, D), Angle(B, A, C))
+PointOnLine(F, Line(A, B))
+Parallel(Line(D, F), Line(A, C))
+PointOnLine(E, Line(A, C))
+Parallel(Line(D, E), Line(A, B))
+
+Why the CDL looks like this:
+- No `Point(A)`, `Point(B)`, etc. - Points are implicitly declared when they appear as arguments to other predicates. Only declare points explicitly with `Point(X)` if they exist but nothing else is known about them.
+- AEDF being a rhombus is NOT in the CDL - this is inferred from the parallel lines and bisector, not stated in the problem. Only describe what is explicitly given or directly visible in the figure.
+- The parallel lines DE || AB and DF || AC are included because they are drawn in the figure and mentioned in the solution, even if not explicitly labeled in the problem statement.
+
+## Common OCR Issues to Watch For
+
+- Angle notation: In Romanian notation, `m(Â)` or `m(A)` with a circumflex over the letter means "measure of angle at vertex A". The circumflex is NOT an accented letter - it marks an angle. Similarly, `∠ABC` and `m∠ABC` both refer to angle ABC.
+- Variable names: OCR may confuse `x` with `×`, `O` with `0`, or `l` with `1`. Context matters.
+- Degree symbols: `°`, `ᵒ`, or even `0` after a number may mean degrees.
+- Unicode symbols: `°` (degree sign), `∏` (product), `∑` (sum) may appear.
+- Fractions: `rac{a}{b}` should be interpreted as `a/b`.
+
+## Context
+
+Problem statement: {{PROBLEM_TASK}}
+
+Additional context{{CONTEXT}}:
+{{CONTEXT}}

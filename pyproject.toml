@@ -1,0 +1,18 @@
+[project]
+name = "exam-processor"
+version = "0.1.0"
+description = "CLI tool for processing geometry exam images"
+requires-python = ">=3.10"
+dependencies = [
+    "typer[all]>=0.12.0",
+    "together>=0.2.0",
+    "python-dotenv>=1.0.0",
+    "pydantic>=2.0.0",
+]
+
+[project.scripts]
+exam-processor = "exam_processor.cli:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

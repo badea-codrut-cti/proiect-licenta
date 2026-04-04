@@ -1,0 +1,34 @@
+You are given a markdown document containing an exam with images. Your task is to parse this document and extract ONLY the geometry problems (problems that have images).
+
+For each geometry problem, extract:
+1. `cerinta`: The problem statement/instructions
+2. `imagini`: The image URLs that belong to this problem (from the subject)
+3. `barem`: The grading details (if provided in BAREM_CONTENT), containing:
+   - `explicatie`: The grading explanation
+   - `imagini`: The image URLs from the barem (if any)
+
+IMPORTANT:
+- Output a FLAT ARRAY of problems (no wrapper object)
+- Only include problems that have at least one image in the subject
+- Do NOT include problems that have no images
+- Match this exact structure for each problem:
+  ```json
+  {
+    "cerinta": "Problem statement...",
+    "imagini": ["https://example.com/image1.png"],
+    "barem": {
+      "explicatie": "Grading explanation...",
+      "imagini": ["https://example.com/barem_image1.png"]
+    }
+  }
+  ```
+- If no barem is provided, omit the `barem` field entirely
+- If barem has no images, use empty array for `barem.imagini`
+
+Return your response as a JSON array of problems, no additional text.
+
+Exam document:
+{{EXAM_CONTENT}}
+
+Barem/Grading document:
+{{BAREM_CONTENT}}
