@@ -6,9 +6,38 @@ from pathlib import Path
 import typer
 from exam_processor.client import TogetherClient, MathpixClient
 from exam_processor.batch import SubjectExtractionBatch, ImageDescriptionBatch, combine_results
-from exam_processor.models import SubjectEntry
+from exam_processor.schemas import SubjectEntry, ProblemSchema
+from exam_processor.models import (
+    get_model,
+    validate_model_for_images,
+    format_usage_info,
+    DEFAULT_EXTRACTION_MODEL,
+    DEFAULT_CDL_MODEL,
+)
 
 app = typer.Typer(help="Exam Processor CLI")
+
+
+@app.callback()
+def global_options(
+    ctx: typer.Context,
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable debug output"),
+    model: str = typer.Option(None, "--model", "-m", help="Override model for all commands"),
+):
+    """Global options available for all commands."""
+    ctx.meta["verbose"] = verbose
+    ctx.meta["model"] = model
+
+
+def get_verbose(ctx: typer.Context) -> bool:
+    """Get verbose flag from context."""
+    return ctx.meta.get("verbose", False)
+
+
+def get_model_override(ctx: typer.Context) -> str | None:
+    """Get model override from context."""
+    return ctx.meta.get("model")
+
 
 def get_client() -> TogetherClient:
     """Get a configured Together client."""
@@ -30,12 +59,27 @@ def get_mathpix_client() -> MathpixClient:
 
 @app.command()
 def create_extraction(
+    ctx: typer.Context,
     input_file: Path = typer.Argument(..., exists=True, help="JSON file with subject entries"),
     output_dir: Path = typer.Option(".", help="Directory to save batch tracking files"),
     tracking_file: Path = typer.Option(..., help="Path to save the batch tracking JSON"),
-    model: str = typer.Option("Qwen/Qwen3.5-9B", help="Model for extraction"),
+    model: str = typer.Option(None, help="Model for extraction"),
 ):
     """Create a subject extraction batch from a JSON input file."""
+    verbose = get_verbose(ctx)
+    model_override = get_model_override(ctx)
+    
+    # Use model from command, global override, or default
+    actual_model = model or model_override or DEFAULT_EXTRACTION_MODEL
+    
+    if verbose:
+        typer.echo(f"[DEBUG] Using model: {actual_model}")
+    
+    # Validate model exists
+    model_info = get_model(actual_model)
+    if verbose:
+        typer.echo(f"[DEBUG] Model info: input=${model_info.input_price_per_million}/1M, output=${model_info.output_price_per_million}/1M, context={model_info.max_context_length}")
+    
     client = get_client()
     
     with open(input_file, "r", encoding="utf-8") as f:
@@ -54,7 +98,7 @@ def create_extraction(
     batch_id = batch.create(
         entries=entries,
         output_dir=str(output_dir),
-        model=model
+        model=actual_model
     )
     
     # Rename tracking file to user-specified path
@@ -63,6 +107,8 @@ def create_extraction(
         tracking_file.parent.mkdir(parents=True, exist_ok=True)
         default_tracking.replace(tracking_file)
     
+    if verbose:
+        typer.echo(f"[DEBUG] Created batch: {batch_id}")
     typer.echo(batch_id)
 
 
@@ -81,20 +127,24 @@ def batch_status(batch_id: str):
         typer.echo(f"Progress: {status['progress']}%")
     if status.get("error"):
         typer.secho(f"Error: {status['error']}", fg=typer.colors.RED)
+    if status.get("error_file_id"):
+        typer.secho(f"Error file: {status['error_file_id']}", fg=typer.colors.YELLOW)
 
 
 @app.command()
 def retrieve_extraction(
+    ctx: typer.Context,
     batch_id: str,
     tracking_file: Path = typer.Option(..., exists=True, help="Tracking JSON from create-extraction"),
     output_file: Path = typer.Option(..., help="Path to save the result JSON"),
-    verbose: bool = typer.Option(False, "--verbose", "-v", help="Print raw JSONL responses for failed parsing attempts"),
 ):
     """Retrieve results from a subject extraction batch."""
+    verbose = get_verbose(ctx)
+    
     client = get_client()
     batch = SubjectExtractionBatch(client)
     
-    result = batch.retrieve(
+    result, (input_tokens, output_tokens), model_name = batch.retrieve(
         batch_id=batch_id,
         tracking_file=str(tracking_file),
         output_file=str(output_file),
@@ -103,23 +153,40 @@ def retrieve_extraction(
     
     total_problems = sum(len(v) for v in result.values())
     typer.secho(f"Saved {total_problems} problems from {len(result)} files to {output_file}", fg=typer.colors.GREEN)
+    
+    model_info = get_model(model_name)
+    typer.echo(format_usage_info(input_tokens, output_tokens, model_info))
 
 
 @app.command()
 def create_image_description(
+    ctx: typer.Context,
     extraction_result: Path = typer.Argument(..., exists=True, help="JSON file from retrieve-extraction"),
     output_dir: Path = typer.Option(".", help="Directory to save batch tracking files"),
     tracking_file: Path = typer.Option(..., help="Path to save the batch tracking JSON"),
-    model: str = typer.Option("Qwen/Qwen3.5-397B-A17B", help="Model for image description"),
+    model: str = typer.Option(None, help="Model for image description"),
 ):
     """Create an image description batch from extraction results."""
+    verbose = get_verbose(ctx)
+    model_override = get_model_override(ctx)
+    
+    # Use model from command, global override, or default
+    actual_model = model or model_override or DEFAULT_CDL_MODEL
+    
+    if verbose:
+        typer.echo(f"[DEBUG] Using model: {actual_model}")
+    
+    # Validate model exists AND supports images
+    model_info = validate_model_for_images(actual_model)
+    if verbose:
+        typer.echo(f"[DEBUG] Model info: input=${model_info.input_price_per_million}/1M, output=${model_info.output_price_per_million}/1M, context={model_info.max_context_length}, supports_images={model_info.supports_images}")
+    
     client = get_client()
     
     with open(extraction_result, "r", encoding="utf-8") as f:
         data = json.load(f)
     
     # Parse the grouped result
-    from exam_processor.models import ProblemSchema
     problems_by_file: dict[str, list[ProblemSchema]] = {}
     for file_path, problems in data.items():
         problems_by_file[file_path] = [ProblemSchema(**p) for p in problems]
@@ -128,7 +195,7 @@ def create_image_description(
     batch_id = batch.create_from_problems(
         problems_by_file=problems_by_file,
         output_dir=str(output_dir),
-        model=model
+        model=actual_model
     )
     
     # Rename tracking file to user-specified path
@@ -137,21 +204,25 @@ def create_image_description(
         tracking_file.parent.mkdir(parents=True, exist_ok=True)
         default_tracking.replace(tracking_file)
     
+    if verbose:
+        typer.echo(f"[DEBUG] Created batch: {batch_id}")
     typer.echo(batch_id)
 
 
 @app.command()
 def retrieve_image_description(
+    ctx: typer.Context,
     batch_id: str,
     tracking_file: Path = typer.Option(..., exists=True, help="Tracking JSON from create-image-description"),
     output_file: Path = typer.Option(..., help="Path to save the result JSON"),
-    verbose: bool = typer.Option(False, "--verbose", "-v", help="Print raw JSONL responses for failed CDL attempts"),
 ):
     """Retrieve CDL results from an image description batch."""
+    verbose = get_verbose(ctx)
+    
     client = get_client()
     batch = ImageDescriptionBatch(client)
     
-    result = batch.retrieve(
+    result, (input_tokens, output_tokens), model_name = batch.retrieve(
         batch_id=batch_id,
         tracking_file=str(tracking_file),
         output_file=str(output_file),
@@ -159,7 +230,23 @@ def retrieve_image_description(
     )
     
     total_cdls = sum(len(v) for v in result.values())
-    typer.secho(f"Saved CDL for {total_cdls} images to {output_file}", fg=typer.colors.GREEN)
+    
+    # Calculate stats
+    geometric_count = 0
+    successful_count = 0
+    for cdls in result.values():
+        for cdl in cdls:
+            if cdl.get("is_geometric", False):
+                geometric_count += 1
+                if cdl.get("is_complete", False) and cdl.get("description") != "[Failed]":
+                    successful_count += 1
+    
+    typer.secho(f"Saved CDL for {total_cdls} total images to {output_file}", fg=typer.colors.GREEN)
+    typer.secho(f"  {geometric_count} geometric images")
+    typer.secho(f"  {successful_count}/{geometric_count} successful (is_complete: true, no parsing errors)", fg=typer.colors.GREEN if successful_count == geometric_count else typer.colors.YELLOW)
+    
+    model_info = get_model(model_name)
+    typer.echo(format_usage_info(input_tokens, output_tokens, model_info))
 
 
 @app.command()
@@ -169,8 +256,6 @@ def combine(
     output_file: Path = typer.Option(..., help="Path to save the final combined result"),
 ):
     """Combine extraction results with CDL descriptions into final output."""
-    from exam_processor.models import ProblemSchema
-    
     # Load extraction results
     with open(extraction_result, "r", encoding="utf-8") as f:
         problems_by_file: dict[str, list[ProblemSchema]] = {
@@ -195,6 +280,7 @@ def combine(
 
 @app.command()
 def convert_documents(
+    ctx: typer.Context,
     input_folder: Path = typer.Argument(..., exists=True, help="Input folder containing documents"),
     output_folder: Path = typer.Argument(..., help="Output folder for markdown files"),
     extensions: str = typer.Option(
@@ -203,7 +289,6 @@ def convert_documents(
         help="Comma-separated list of file extensions to process"
     ),
     skip_existing: bool = typer.Option(False, "--skip-existing", help="Skip files that already have markdown output"),
-    verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed progress"),
 ):
     """
     Convert all documents in a folder (and subfolders) to markdown.
@@ -211,6 +296,7 @@ def convert_documents(
     Preserves the folder structure in the output directory.
     Supported formats: PDF, DOCX, DOC, PPTX, PPT, EPUB
     """
+    verbose = get_verbose(ctx)
     ext_set = {f".{ext.strip().lower()}" for ext in extensions.split(",")}
 
     all_files = []

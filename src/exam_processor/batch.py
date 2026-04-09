@@ -6,6 +6,30 @@ from pathlib import Path
 from typing import Optional
 
 from exam_processor.client import TogetherClient
+from exam_processor.models import (
+    DEFAULT_EXTRACTION_MODEL,
+    DEFAULT_CDL_MODEL,
+)
+
+from exam_processor.schemas import (
+    SubjectEntry,
+    ProblemSchema,
+    BaremSchema,
+    CDLSchema,
+    ImageWithCDL,
+    EnrichedProblem,
+)
+
+
+def format_response_format(schema_cls: type) -> dict:
+    """Format a Pydantic model schema for Together's response_format parameter."""
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": schema_cls.__name__,
+            "schema": schema_cls.model_json_schema()
+        }
+    }
 
 
 def strip_json_code_block(content: str) -> str:
@@ -18,14 +42,6 @@ def strip_json_code_block(content: str) -> str:
     if content.endswith('```'):
         content = content[:-3]
     return content.strip()
-from exam_processor.models import (
-    SubjectEntry,
-    ProblemSchema,
-    BaremSchema,
-    CDLSchema,
-    ImageWithCDL,
-    EnrichedProblem,
-)
 
 
 class SubjectExtractionBatch:
@@ -45,7 +61,7 @@ class SubjectExtractionBatch:
         self,
         entries: list[SubjectEntry],
         output_dir: str = ".",
-        model: str = TogetherClient.DEFAULT_SPLIT_MODEL
+        model: str = DEFAULT_EXTRACTION_MODEL
     ) -> str:
         """
         Create a subject extraction batch. Each entry = one batch request.
@@ -107,25 +123,50 @@ class SubjectExtractionBatch:
         tracking_file: str,
         output_file: Optional[str] = None,
         verbose: bool = False
-    ) -> dict[str, list[ProblemSchema]]:
+    ) -> tuple[dict[str, list[ProblemSchema]], tuple[int, int], str]:
         """
         Retrieve results grouped by source file.
         
         Returns:
-            dict[str, list[ProblemSchema]] - file path -> list of problems
+            tuple of (file path -> list of problems, (total_input_tokens, total_output_tokens), model_name)
         """
+        if verbose:
+            print(f"[DEBUG] Calling retrieve_batch_results for batch_id={batch_id}")
         results_content = self.client.retrieve_batch_results(batch_id)
+        if verbose:
+            print(f"[DEBUG] retrieve_batch_results returned {len(results_content)} chars")
+            
+        # Check for errors
+        error_content = self.client.retrieve_batch_errors(batch_id)
+        if error_content:
+            error_lines = error_content.strip().split('\n')
+            print(f"[WARNING] Batch has {len(error_lines)} error(s):")
+            for line in error_lines[:10]:  # Show first 10 errors
+                print(f"  {line}")
+            if len(error_lines) > 10:
+                print(f"  ... and {len(error_lines) - 10} more errors")
+        
         results_by_custom_id = self.client.parse_batch_results(results_content)
+        
+        if verbose:
+            print(f"[DEBUG] Parsed {len(results_by_custom_id)} successful results")
 
         with open(tracking_file, "r", encoding="utf-8") as f:
             tracking_data = json.load(f)
 
         problems_by_file: dict[str, list[ProblemSchema]] = {}
+        total_input_tokens = 0
+        total_output_tokens = 0
+        model_name: str | None = None
 
         for custom_id, tracking in tracking_data.items():
             result = results_by_custom_id.get(custom_id)
             if not result:
                 continue
+
+            # Extract model from first successful result
+            if model_name is None:
+                model_name = result.get("request", {}).get("body", {}).get("model", DEFAULT_EXTRACTION_MODEL)
 
             source_file = tracking["subject_path"]
 
@@ -150,6 +191,10 @@ class SubjectExtractionBatch:
                         problems_by_file[source_file] = []
                     problems_by_file[source_file].append(problem)
                     
+                usage = result["response"]["body"]["usage"]
+                total_input_tokens += usage["prompt_tokens"]
+                total_output_tokens += usage["completion_tokens"]
+                
             except (json.JSONDecodeError, KeyError, TypeError) as e:
                 print(f"Warning: Failed to parse result for {custom_id}: {e}")
                 if verbose:
@@ -164,7 +209,7 @@ class SubjectExtractionBatch:
             with open(output_file, "w", encoding="utf-8") as f:
                 json.dump(output, f, indent=2, ensure_ascii=False)
 
-        return problems_by_file
+        return problems_by_file, (total_input_tokens, total_output_tokens), model_name or DEFAULT_EXTRACTION_MODEL
 
 
 class ImageDescriptionBatch:
@@ -184,7 +229,7 @@ class ImageDescriptionBatch:
         self,
         problems_by_file: dict[str, list[ProblemSchema]],
         output_dir: str = ".",
-        model: str = TogetherClient.DEFAULT_CDL_MODEL
+        model: str = DEFAULT_CDL_MODEL
     ) -> str:
         """
         Create image description batch from problems grouped by file.
@@ -230,8 +275,10 @@ class ImageDescriptionBatch:
                             "role": "user",
                             "content": self.client.build_image_content(prompt, image_url)
                         }],
-                        "temperature": 0.2,
-                        "max_tokens": 32768,
+                        "temperature": 0.5,
+                        "repetition_penalty": 1.2,
+                        "max_tokens": 20000,
+                        "response_format": format_response_format(CDLSchema),
                     }
 
                     jsonl_line = json.dumps({"custom_id": custom_id, "body": request_body})
@@ -264,6 +311,7 @@ class ImageDescriptionBatch:
                             }],
                             "temperature": 0.2,
                             "max_tokens": 32768,
+                            "response_format": CDLSchema.model_json_schema(),
                         }
 
                         jsonl_line = json.dumps({"custom_id": custom_id, "body": request_body})
@@ -293,18 +341,37 @@ class ImageDescriptionBatch:
         tracking_file: str,
         output_file: Optional[str] = None,
         verbose: bool = False
-    ) -> dict[str, list[dict]]:
+    ) -> tuple[dict[str, list[dict]], tuple[int, int], str]:
         """
         Retrieve CDL results grouped by source file.
         
         Returns:
-            dict[str, list[dict]] - file path -> list of CDL results
+            tuple of (file path -> list of CDL results, (total_input_tokens, total_output_tokens), model_name)
         """
         results_content = self.client.retrieve_batch_results(batch_id)
+        
+        # Check for errors
+        error_content = self.client.retrieve_batch_errors(batch_id)
+        if error_content:
+            error_lines = error_content.strip().split('\n')
+            print(f"[WARNING] Batch has {len(error_lines)} error(s):")
+            for line in error_lines[:10]:  # Show first 10 errors
+                print(f"  {line}")
+            if len(error_lines) > 10:
+                print(f"  ... and {len(error_lines) - 10} more errors")
+        
         results_by_custom_id = self.client.parse_batch_results(results_content)
-
+        
         with open(tracking_file, "r", encoding="utf-8") as f:
             tracking_data = json.load(f)
+        
+        if verbose:
+            print(f"[DEBUG] Tracking file has {len(tracking_data)} entries")
+            print(f"[DEBUG] Batch results has {len(results_by_custom_id)} entries")
+
+        total_input_tokens = 0
+        total_output_tokens = 0
+        model_name: str | None = None
 
         results_by_file: dict[str, list[dict]] = {}
 
@@ -312,6 +379,10 @@ class ImageDescriptionBatch:
             result = results_by_custom_id.get(custom_id)
             if not result:
                 continue
+
+            # Extract model from first successful result
+            if model_name is None:
+                model_name = result.get("request", {}).get("body", {}).get("model", DEFAULT_CDL_MODEL)
 
             source_file = tracking["source_file"]
 
@@ -337,12 +408,16 @@ class ImageDescriptionBatch:
                 "description": cdl_data.get("description", ""),
                 "is_complete": cdl_data.get("is_complete", True),
             })
+            
+            usage = result["response"]["body"]["usage"]
+            total_input_tokens += usage["prompt_tokens"]
+            total_output_tokens += usage["completion_tokens"]
 
         if output_file:
             with open(output_file, "w", encoding="utf-8") as f:
                 json.dump(results_by_file, f, indent=2, ensure_ascii=False)
 
-        return results_by_file
+        return results_by_file, (total_input_tokens, total_output_tokens), model_name or DEFAULT_CDL_MODEL
 
 
 def combine_results(

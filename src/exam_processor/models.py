@@ -1,48 +1,83 @@
-"""Pydantic models for the exam processor."""
+"""Model definitions with pricing info and validation for Together.ai."""
 
-from typing import Optional
-from pydantic import BaseModel, Field
+from dataclasses import dataclass
 
+@dataclass
+class ModelInfo:
+    """Information about a Together.ai model."""
+    name: str
+    input_price_per_million: float  # $/1M tokens
+    output_price_per_million: float  # $/1M tokens
+    max_context_length: int
+    supports_images: bool
 
-class SubjectEntry(BaseModel):
-    """Input entry for subject extraction batch creation."""
-    subject: str = Field(description="Path to subject file")
-    barem: Optional[str] = Field(default=None, description="Path to barem file (optional)")
+    def input_price(self, tokens: int) -> float:
+        """Calculate cost for input tokens in dollars."""
+        return (tokens / 1_000_000) * self.input_price_per_million
 
-
-class BaremSchema(BaseModel):
-    """Schema for barem (grading details)."""
-    explicatie: str = Field(description="Grading explanation")
-    imagini: list[str] = Field(default_factory=list, description="Images in barem")
-
-
-class ProblemSchema(BaseModel):
-    """Single problem from extraction - matches out.json structure."""
-    cerinta: str = Field(description="Problem statement")
-    barem: Optional[BaremSchema] = Field(default=None, description="Barem (grading details)")
-    imagini: list[str] = Field(default_factory=list, description="Images in subject")
+    def output_price(self, tokens: int) -> float:
+        """Calculate cost for output tokens in dollars."""
+        return (tokens / 1_000_000) * self.output_price_per_million
 
 
-class CDLSchema(BaseModel):
-    """Schema for CDL (Contextual Description Language) response."""
-    is_geometric: bool = Field(description="Whether the image is a geometric figure")
-    description: str = Field(description="CDL description or Unknown(reason)")
-    is_complete: bool = Field(default=True, description="Whether fully representable in CDL")
+# Format: (name, input_$/1M, output_$/1M, max_context, supports_images)
+MODELS: dict[str, ModelInfo] = {
+    "Qwen/Qwen3.5-9B": ModelInfo(
+        name="Qwen/Qwen3.5-9B",
+        input_price_per_million=0.10,
+        output_price_per_million=0.15,
+        max_context_length=256000,
+        supports_images=True,
+    ),
+    "Qwen/Qwen3.5-397B-A17B": ModelInfo(
+        name="Qwen/Qwen3.5-397B-A17B",
+        input_price_per_million=0.6,
+        output_price_per_million=3.6,
+        max_context_length=256000,
+        supports_images=True,
+    )
+}
+
+DEFAULT_EXTRACTION_MODEL = "Qwen/Qwen3.5-9B"
+DEFAULT_CDL_MODEL = "Qwen/Qwen3.5-397B-A17B"
 
 
-class ImageWithCDL(BaseModel):
-    """Image with its CDL description."""
-    url: str = Field(description="Image URL")
-    cdl: CDLSchema = Field(description="CDL description")
+def get_model(model_name: str) -> ModelInfo:
+    """Get model info by name. Raises ValueError if not found."""
+    if model_name not in MODELS:
+        available = ", ".join(MODELS.keys())
+        raise ValueError(
+            f"Unknown model: {model_name!r}\n"
+            f"Available models: {available}"
+        )
+    return MODELS[model_name]
 
 
-class EnrichedProblem(BaseModel):
-    """Problem with CDL descriptions for all images."""
-    cerinta: str = Field(description="Problem statement")
-    barem: Optional[BaremSchema] = Field(default=None, description="Barem (grading details)")
-    imagini: list[ImageWithCDL] = Field(default_factory=list, description="Subject images with CDL")
-    barem_imagini: list[ImageWithCDL] = Field(default_factory=list, description="Barem images with CDL")
+def validate_model_for_images(model_name: str) -> ModelInfo:
+    """Get model info and validate it supports image inputs. Raises ValueError otherwise."""
+    model_info = get_model(model_name)
+    if not model_info.supports_images:
+        raise ValueError(
+            f"Model {model_name!r} does not support image inputs.\n"
+            f"Use a vision model like: Qwen/Qwen2.5-VL-32B-Instruct"
+        )
+    return model_info
 
 
-# Final output type - key is file path, value is list of problems with CDL
-FinalResult = dict[str, list[EnrichedProblem]]
+def format_usage_info(
+    input_tokens: int,
+    output_tokens: int,
+    model: ModelInfo
+) -> str:
+    """Format token usage and cost info as a string."""
+    input_cost = model.input_price(input_tokens)
+    output_cost = model.output_price(output_tokens)
+    total_cost = input_cost + output_cost
+
+    return (
+        f"Token usage: {input_tokens:,} input + {output_tokens:,} output "
+        f"({input_tokens + output_tokens:,} total)\n"
+        f"  Cost: ${input_cost:.4f} input + ${output_cost:.4f} output "
+        f"= ${total_cost:.4f} total"
+    )
+

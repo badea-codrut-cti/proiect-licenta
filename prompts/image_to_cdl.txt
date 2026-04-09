@@ -12,14 +12,22 @@ You must describe the problem using ONLY the predicates defined below.
 
 2D Shapes:
 Point(A): Declares a point A.
+Point(A, x, y): Declares a point A at coordinates (x, y) in 2D.
+Point(A, x, y, z): Declares a point A at coordinates (x, y, z) in 3D.
 Line(A, B): Declares a line segment between A and B.
 Angle(A, B, C): Declares an angle with vertex B.
 Triangle(A, B, C): Declares a triangle formed by A, B, and C.
+ObtuseTriangle(A, B, C): Declares an obtuse-angled triangle (one angle > 90deg).
+AcuteTriangle(A, B, C): Declares an acute-angled triangle (all angles < 90deg).
+RightTriangle(A, B, C): Declares a right-angled triangle (one angle = 90deg).
 Parallelogram(J, K, L, M): Declares a parallelogram.
 Square(A, B, C, D): Declares a square.
 Circle(K): Declares a circle with center K.
 Arc(M, N): Declares an arc between points M and N.
-Centoid(Triangle(A, B, C), G): G is the centoid of the triangle ABC.
+Centroid(Triangle(A, B, C), G): G is the centroid of triangle ABC (intersection of medians).
+Circumcenter(Triangle(A, B, C), O): O is the circumcenter of triangle ABC (intersection of perpendicular bisectors, center of circumcircle).
+Orthocenter(Triangle(A, B, C), H): H is the orthocenter of triangle ABC (intersection of altitudes).
+Incenter(Triangle(A, B, C), I): I is the incenter of triangle ABC (intersection of angle bisectors, center of incircle).
 
 3D Shapes:
 Pyramid(A, B, C, D): Declares a triangular pyramid (tetrahedron) with base triangle ABC and apex D.
@@ -34,24 +42,22 @@ Cone(K): Declares a cone (K is the center of the base).
 PointOnLine(D, Line(A, C)): Point D is on the line segment AC.
 PointOnCircle(M, Circle(K)): Point M is on the circumference of circle K.
 PointOnSphere(M, Sphere(K)): Point M is on the surface of sphere K.
-Parallel(Line(A, B), Line(C, D)): Line AB is parallel to line CD.
-Perpendicular(Line(B, D), Line(A, D)): Line BD is perpendicular to line AD.
-IsCentreOfCircle(O, Circle(O)): Point O is the center of the circle.
-IsCentreOfSphere(O, Sphere(O)): Point O is the center of the sphere.
+Parallel(X, Y): X is parallel to Y. Can be any pair of: line, plane, face, surface.
+Perpendicular(X, Y): X is perpendicular to Y. Can be any pair of: line, plane, face, surface.
 Congruent(Triangle(A, B, C), Triangle(D, E, F)): The two triangles are congruent.
 Congruent(Angle(A, B, C), Angle(D, E, F)): The two angles are congruent (equal measure).
 Similar(Triangle(A, B, C), Triangle(D, E, F)): The triangles share the same angles.
 Bisector(Line(B, M), Angle(A, B, C)): Line BM bisects angle ABC.
 Midpoint(M, Line(A, B)): M is the midpoint of line AB.
 Circumcircle(Circle(K), Triangle(A, B, C)): Circle K passes through triangle ABC vertices.
-Altitude(Line(A, D), Triangle(A, B, C)): Line AD is an altitude of triangle ABC (perpendicular to BC).
+Altitude(Line(A, D), Triangle(A, B, C)): Line AD is an altitude of triangle ABC (dropped from vertex A perpendicular to side BC).
 TangentTo(Line(M, N), Circle(K)): Line MN is tangent to circle K.
-IsParallelToPlane(Triangle(A, B, C), Plane(P, Q, R)): A face is parallel to a plane.
 
 ## Semantic Measurements
 
 Equals(LengthOf(Line(M, N)), 16): The length of line MN is 16.
 Equals(LengthOf(Line(C, D)), x): The length of line CD is the variable x.
+Equals(Radius(Circle(K), 4): Circle K has a radius of 4.
 Equals(MeasureOf(Angle(C, A, B)), 54): Angle CAB is 54 degrees.
 Equals(MeasureOf(Arc(M, N)), 98): The arc MN is 98 degrees.
 Equals(PerimeterOf(Triangle(A, B, C)), 40): The perimeter is 40.
@@ -63,6 +69,17 @@ Equals(SurfaceAreaOf(Pyramid(A, B, C, D)), 50): The surface area is 50.
 EqualsRatio(LengthOf(Line(A, B)), LengthOf(Line(C, D)), 2): AB / CD = 2 (AB is twice CD).
 EqualsRatio(LengthOf(Line(A, D)), LengthOf(Line(A, B)), 3): AD / AB = 3.
 EqualsRatio(MeasureOf(Angle(A, B, C)), MeasureOf(Angle(D, E, F)), 2): Angle ABC is twice angle DEF.
+Equals(X, Sum(Y, Z)): X equals Y + Z. Example: Equals(LengthOf(Line(A, B)), Sum(LengthOf(Line(A, D)), LengthOf(Line(D, C)))) means AB = AD + DC.
+Equals(X, Diff(Y, Z)): X equals Y - Z.
+NotEquals(X, Y): X is not equal to Y.
+GreaterThan(X, Y): X > Y.
+LowerThan(X, Y): X < Y.
+GreaterThanEquals(X, Y): X >= Y.
+LowerThanEquals(X, Y): X <= Y.
+Latex(formula): Represents an arbitrary LaTeX mathematical expression. Can be used in Equals predicates:
+- Equals(LengthOf(Line(A, B)), Latex(\sqrt[3]{37})): AB equals the cube root of 37.
+- Equals(MeasureOf(Angle(A, B, C)), Latex(\frac{\pi}{4})): Angle ABC equals pi/4 radians.
+- Equals(LengthOf(Line(A, B)), Latex(x^2 + 2x + 1))
 
 ## Handling Unknown/Unrepresentable Content
 
@@ -72,11 +89,11 @@ Unknown(reason): Indicates something that cannot be represented.
 
 ## Output Format
 
-Return your response as a JSON object:
-- "image_index": the index of the image
-- "is_geometric": true if the image is a geometric figure, false otherwise
-- "description": CDL description or Unknown(reason)
-- "is_complete": true if fully representable, false otherwise
+Return your response as a JSON object with these exact fields:
+- "image_index": the index of the image (integer)
+- "is_geometric": true if the image is a geometric figure, false otherwise (boolean)
+- "description": a SINGLE STRING containing the CDL description, with each predicate on its own line. For example: `"description": "Triangle(A, B, C)\nEquals(LengthOf(Line(A, B)), 42)"` - NOT an array!
+- "is_complete": true if fully representable, false otherwise (boolean)
 
 ## Examples
 

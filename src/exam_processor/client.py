@@ -21,9 +21,6 @@ class TogetherClient:
             raise ValueError("Together API key is required. Set TOGETHER_API_KEY environment variable.")
         self.client = Together(api_key=self.api_key)
 
-    DEFAULT_SPLIT_MODEL = "Qwen/Qwen3.5-9B"
-    DEFAULT_CDL_MODEL = "Qwen/Qwen3.5-397B-A17B"
-
     def load_prompt(self, prompt_file: str) -> str:
         """Load a prompt template from file."""
         return Path(prompt_file).read_text(encoding="utf-8")
@@ -67,6 +64,8 @@ class TogetherClient:
             "model_id": getattr(batch, "model_id", None),
             "endpoint": getattr(batch, "endpoint", None),
             "error": getattr(batch, "error", None),
+            "output_file_id": getattr(batch, "output_file_id", None),
+            "error_file_id": getattr(batch, "error_file_id", None),
         }
 
     def retrieve_batch_results(self, batch_id: str) -> str:
@@ -81,6 +80,19 @@ class TogetherClient:
         if isinstance(output_content, bytes):
             return output_content.decode("utf-8")
         return output_content
+
+    def retrieve_batch_errors(self, batch_id: str) -> str | None:
+        """Retrieve the error file content from a batch if it exists."""
+        batch = self.client.batches.retrieve(batch_id)
+        
+        if not batch.error_file_id:
+            return None
+        
+        response = self.client.files.content(batch.error_file_id)
+        error_content = response.parse()
+        if isinstance(error_content, bytes):
+            return error_content.decode("utf-8")
+        return error_content
 
     def parse_batch_results(self, results_content: str) -> dict[str, Any]:
         """Parse JSONL batch results into a dictionary keyed by custom_id."""
