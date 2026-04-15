@@ -446,11 +446,15 @@ def combine_results(
                     (r for r in problem_cdls if r["source_type"] == "subject" and r["image_index"] == img_idx),
                     None
                 )
-                cdl = CDLSchema(
-                    is_geometric=cdl_result.get("is_geometric", False) if cdl_result else False,
-                    description=cdl_result.get("description", "[Missing CDL]") if cdl_result else "[Missing CDL]",
-                    is_complete=cdl_result.get("is_complete", True) if cdl_result else False,
-                )
+                try:
+                    cdl = CDLSchema(
+                        is_geometric=cdl_result.get("is_geometric", False) if cdl_result else False,
+                        description=cdl_result.get("description", "[Missing CDL]") if cdl_result else "[Missing CDL]",
+                        is_complete=cdl_result.get("is_complete", True) if cdl_result else False,
+                    )
+                except Exception as e:
+                    print(f"Warning: Invalid CDL for {source_file} problem {problem_idx} subject image {img_idx}: {e}")
+                    continue
                 subject_images.append(ImageWithCDL(url=url, cdl=cdl))
             
             # Build barem images with CDL
@@ -461,11 +465,15 @@ def combine_results(
                         (r for r in problem_cdls if r["source_type"] == "barem" and r["image_index"] == img_idx),
                         None
                     )
-                    cdl = CDLSchema(
-                        is_geometric=cdl_result.get("is_geometric", False) if cdl_result else False,
-                        description=cdl_result.get("description", "[Missing CDL]") if cdl_result else "[Missing CDL]",
-                        is_complete=cdl_result.get("is_complete", True) if cdl_result else False,
-                    )
+                    try:
+                        cdl = CDLSchema(
+                            is_geometric=cdl_result.get("is_geometric", False) if cdl_result else False,
+                            description=cdl_result.get("description", "[Missing CDL]") if cdl_result else "[Missing CDL]",
+                            is_complete=cdl_result.get("is_complete", True) if cdl_result else False,
+                        )
+                    except Exception as e:
+                        print(f"Warning: Invalid CDL for {source_file} problem {problem_idx} barem image {img_idx}: {e}")
+                        continue
                     barem_images.append(ImageWithCDL(url=url, cdl=cdl))
 
             enriched_problems.append(EnrichedProblem(
