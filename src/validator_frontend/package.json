@@ -1,0 +1,32 @@
+{
+  "name": "validator_frontend",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "dev:wrangler": "wrangler dev",
+    "build": "vite build && vite build --ssr",
+    "preview": "npm run build && wrangler dev dist/index.js",
+    "deploy": "npm run build && wrangler deploy --minify",
+    "cf-typegen": "wrangler types --env-interface CloudflareBindings"
+  },
+  "dependencies": {
+    "@cloudflare/workers-types": "^4.20260409.1",
+    "@hono/node-server": "^1.19.13",
+    "@tailwindcss/postcss": "^4.2.2",
+    "drizzle-orm": "^0.45.2",
+    "hono": "^4.12.12"
+  },
+  "devDependencies": {
+    "@cloudflare/vite-plugin": "^1.31.2",
+    "@hono/vite-build": "^1.11.1",
+    "@tailwindcss/vite": "^4.2.2",
+    "autoprefixer": "^10.4.27",
+    "drizzle-kit": "^0.31.10",
+    "postcss": "^8.5.9",
+    "tailwindcss": "^4.2.2",
+    "typescript": "^6.0.2",
+    "vite": "^8.0.8",
+    "vite-plugin-ssr-hot-reload": "^0.5.0",
+    "wrangler": "^4.4.0"
+  }
+}

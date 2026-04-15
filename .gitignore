@@ -5,12 +5,4 @@ __pycache__/
 *.egg-info/
 .pdm-build/
 
-# Batch tracking files (generated)
-*_tracking.json
-*_batch_id.txt
-*_batch_input.jsonl
-
-# Results
-*.json
-
 dataset/

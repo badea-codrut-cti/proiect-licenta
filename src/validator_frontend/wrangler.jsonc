@@ -1,0 +1,29 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "validator_frontend",
+  "main": "dist/index.js",
+  "assets": {
+    "directory": "./dist"
+  },
+  "compatibility_date": "2026-04-09",
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "validator-db",
+      "database_id": "76decc81-3b4e-41de-a97a-a65044cda2ea",
+      "migrations_dir": "./drizzle"
+    }
+  ],
+  "kv_namespaces": [
+    {
+      "binding": "SESSIONS",
+      "id": "73080f91e51649afb145f7d0c00e0eb5"
+    }
+  ],
+  "vars": {
+    "VALIDATOR_PASSWORD": "cdl-validator-2026",
+    "EASY_MAX_LINES": "10",
+    "EASY_BATCH_SIZE": "20",
+    "HARD_BATCH_SIZE": "5"
+  }
+}

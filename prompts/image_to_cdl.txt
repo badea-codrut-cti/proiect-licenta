@@ -33,11 +33,20 @@ Incenter(Triangle(A, B, C), I): I is the incenter of triangle ABC (intersection 
 Pyramid(A, B, C, D): Declares a triangular pyramid (tetrahedron) with base triangle ABC and apex D.
 RectangularPyramid(A, B, C, D, E): Declares a rectangular pyramid with base ABCD and apex E.
 Cube(A, B, C, D, E, F, G, H): Declares a cube with vertices A-H.
+Parallelepiped(A, B, C, D, E, F, G, H): Declares a parallelepiped (6-faced polyhedron with parallel opposite faces). A-D form one face, E-H the opposite face, with AE, BF, CG, DH as edges.
 Sphere(K): Declares a sphere with center K.
 Cylinder(K): Declares a cylinder (K is the center of one base).
 Cone(K): Declares a cone (K is the center of the base).
 
 ## Structural Relations
+
+InsideOf(X, Shape): X is inside the interior of the given shape (point inside triangle, triangle inside circle, etc.).
+InsideOf(Triangle(A, B, C), Circle(K)): Triangle ABC is entirely inside circle K.
+InsideOf(Point(M), Triangle(A, B, C)): Point M is inside triangle ABC.
+InsideOf(Point(M), Parallelogram(A, B, C, D)): Point M is inside the parallelogram ABCD.
+InsideOf(Point(M), Circle(K)): Point M is inside circle K (not on the circumference).
+InsideOf(Point(M), Square(A, B, C, D)): Point M is inside square ABCD.
+InsideOf(Figure1, Figure2): Figure1 is entirely inside Figure2. Use when a smaller figure (e.g., triangle, square, circle) is drawn inside a larger one.
 
 PointOnLine(D, Line(A, C)): Point D is on the line segment AC.
 PointOnCircle(M, Circle(K)): Point M is on the circumference of circle K.
@@ -86,6 +95,8 @@ Latex(formula): Represents an arbitrary LaTeX mathematical expression. Can be us
 If part of the diagram or problem cannot be represented using the predicates above, use the `Unknown` marker.
 
 Unknown(reason): Indicates something that cannot be represented.
+
+For 3D shapes not explicitly listed above (e.g., prism with non-rectangular base, truncated shapes, composite solids), use `Unknown` with a description of the shape if it cannot be decomposed into the supported 3D primitives.
 
 ## Output Format
 
