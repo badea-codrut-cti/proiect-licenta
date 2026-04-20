@@ -3,6 +3,7 @@ import { html } from 'hono/html'
 import { requireSession } from '../../backend/middleware/session';
 import type { ValidatorSession } from '../../backend/types';
 import { AuthenticatedLayout } from '../components/Layout';
+import { ValidationForm } from '../components/ValidationForm';
 import { eq, and, inArray, sql } from 'drizzle-orm';
 import { createDb, schema } from '../../backend/schema';
 import temml from 'temml';
@@ -89,6 +90,11 @@ validate.get('/', requireSession, async (c) => {
       isCompleted: session.validatorType === 'first'
         ? sql`${schema.images.firstValidatorApproved} IS NOT NULL`
         : sql`${schema.images.secondValidatorApproved} IS NOT NULL`,
+      // Crop data
+      cropTop: schema.images.cropTop,
+      cropLeft: schema.images.cropLeft,
+      cropWidth: schema.images.cropWidth,
+      cropHeight: schema.images.cropHeight,
     })
     .from(schema.images)
     .innerJoin(schema.problems, eq(schema.images.problemId, schema.problems.id))
@@ -156,105 +162,122 @@ validate.get('/', requireSession, async (c) => {
     .where(getRemainingWhereClause());
   const totalRemaining = totalRemainingResult[0]?.count || 0;
 
-  // Description to show to second validator (first validator's correction or original AI description)
-  const description = currentImage.firstValidatorModifications || currentImage.aiDescription;
-
   return c.render(
     <AuthenticatedLayout session={session}>
       <main class="max-w-6xl mx-auto mt-6 p-4">
-        {/* Progress */}
-        <div class="bg-white rounded-lg shadow p-4 mb-6">
-          <div class="flex justify-between mb-2">
-            <span class="font-medium">Progres batch ({session.batchType === 'easy' ? 'Ușor' : 'Greu'})</span>
-            <span>{completedCount} / {totalInBatch} din batch | {totalRemaining} rămase în total</span>
-          </div>
-          <div class="w-full bg-gray-200 rounded-full h-3">
-            <div class="bg-blue-600 h-3 rounded-full transition-all" style={`width: ${progressPercent}%`}></div>
-          </div>
-        </div>
+          <ValidationForm image={currentImage as any} />
 
-        {/* Problem Statement */}
-        <div class="bg-yellow-100 border border-yellow-400 rounded-lg p-4 mb-6">
-          <h3 class="font-bold mb-2">Cerință:</h3>
-          <pre class="whitespace-pre-wrap" dangerouslySetInnerHTML={{ __html: renderMathSafe(currentImage.cerinta) }} />
-        </div>
-
-          {/* Validation Form */}
-          <form id="validationForm" class="space-y-6">
-            <input type="hidden" name="imageId" value={currentImage.id} />
-
-            <div class="grid md:grid-cols-2 gap-6">
-              {/* Image */}
-              <div class="bg-white rounded-lg shadow p-4">
-                <h3 class="font-bold mb-4">Imagine</h3>
-                <img src={currentImage.link} alt="Diagrama" class="w-full border rounded-lg" />
-              </div>
-
-              {/* Description Editor */}
-              <div class="bg-white rounded-lg shadow p-4">
-                <h3 class="font-bold mb-2">Descriere CDL</h3>
-                <textarea
-                  id="descriptionEditor"
-                  name="modifications"
-                  rows={12}
-                  class="w-full px-4 py-2 border rounded-lg font-mono text-sm"
-                  autocomplete="off"
-                >{description}</textarea>
-              </div>
-            </div>
-
-            {/* Submit */}
-            <div class="bg-white rounded-lg shadow p-6">
-              <div class="flex flex-wrap gap-4">
-                <button
-                  type="button"
-                  onclick="submitValidation(true)"
-                  class="flex-1 min-w-48 bg-green-600 text-white py-3 px-6 rounded-lg hover:bg-green-700 transition"
-                >
-                  ✓ Aprobat
-                </button>
-                <button
-                  type="button"
-                  onclick="submitValidation(false)"
-                  class="flex-1 min-w-48 bg-yellow-600 text-white py-3 px-6 rounded-lg hover:bg-yellow-700 transition"
-                >
-                  ⚠ Corectat
-                </button>
-              </div>
-            </div>
-          </form>
-
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.2/cropper.min.js"></script>
         {html`<script>
-          async function submitValidation(isApproval) {
-            const form = document.getElementById('validationForm');
-            const formData = new FormData(form);
-            const modifications = formData.get('modifications');
-            
-            if (!modifications || !modifications.trim()) {
-              alert('Trebuie să completezi descrierea CDL.');
-              return;
+          (function() {
+            var recropBtn = document.getElementById('recropBtn');
+            var cropModal = document.getElementById('cropModal');
+            var closeCropBtn = document.getElementById('closeCropBtn');
+            var saveCropBtn = document.getElementById('saveCropBtn');
+            var cancelCropBtn = document.getElementById('cancelCropBtn');
+            var mainImage = document.getElementById('mainImage');
+            var cropInfo = document.getElementById('cropInfo');
+            var cropDataSpan = document.getElementById('cropData');
+
+            var cropper = null;
+            var imageId = recropBtn && recropBtn.dataset.imageId;
+            var originalSrc = recropBtn && recropBtn.dataset.imageSrc;
+
+
+            function openCropModal() {
+              if (!cropModal) return;
+              cropModal.classList.remove('hidden');
+
+              setTimeout(function() {
+                if (cropper) {
+                  cropper.destroy();
+                }
+
+                var cropTarget = document.getElementById('cropTarget');
+                // Use our proxy for CORS
+                cropTarget.src = '/validate/image-proxy?url=' + encodeURIComponent(originalSrc);
+                cropper = new Cropper(cropTarget, {
+                  aspectRatio: undefined,
+                  viewMode: 0,
+                  dragMode: 'move',
+                  autoCropArea: 1,
+                  cropBoxMovable: true,
+                  cropBoxResizable: true,
+                });
+              }, 100);
             }
-            
-            const payload = {
-              imageId: parseInt(formData.get('imageId')),
-              approved: isApproval,
-              modifications: modifications
-            };
-            try {
-              const response = await fetch('/validate/submit', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
-              });
-              if (response.ok) {
-                location.reload();
-              } else {
-                alert('Eroare la trimitere. Te rog să încerci din nou.');
+
+            function closeCropModal() {
+              if (cropModal) {
+                cropModal.classList.add('hidden');
               }
-            } catch (err) {
-              alert('Eroare de conexiune.');
+              if (cropper) {
+                cropper.destroy();
+                cropper = null;
+              }
             }
-          }
+
+            async function saveCrop() {
+              if (!cropper) return;
+
+
+              var cropBoxData = cropper.getCropBoxData();
+              var crop = {
+                top: Math.round(cropBoxData.top),
+                left: Math.round(cropBoxData.left),
+                width: Math.round(cropBoxData.width),
+                height: Math.round(cropBoxData.height),
+              };
+
+
+              try {
+                var url = new URL(originalSrc);
+                url.searchParams.set('top_left_y', String(crop.top));
+                url.searchParams.set('top_left_x', String(crop.left));
+                url.searchParams.set('width', String(crop.width));
+                url.searchParams.set('height', String(crop.height));
+                mainImage.src = url.toString();
+              } catch (e) {
+                console.error('Failed to update image URL:', e);
+              }
+
+              if (cropDataSpan) {
+                cropDataSpan.textContent = JSON.stringify(crop);
+              }
+              if (cropInfo) {
+                cropInfo.classList.remove('hidden');
+              }
+
+              try {
+                await fetch('/validate/crop', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    imageId: parseInt(imageId),
+                    cropTop: crop.top,
+                    cropLeft: crop.left,
+                    cropWidth: crop.width,
+                    cropHeight: crop.height,
+                  })
+                });
+              } catch (e) {
+                console.error('Failed to save crop:', e);
+              }
+
+              closeCropModal();
+            }
+
+            if (recropBtn) recropBtn.addEventListener('click', openCropModal);
+            if (closeCropBtn) closeCropBtn.addEventListener('click', closeCropModal);
+            if (cancelCropBtn) cancelCropBtn.addEventListener('click', closeCropModal);
+            if (saveCropBtn) saveCropBtn.addEventListener('click', saveCrop);
+
+            document.addEventListener('keydown', function(e) {
+              if (e.key === 'Escape' && cropModal && !cropModal.classList.contains('hidden')) {
+                closeCropModal();
+              }
+            });
+          })();
         </script>`}
       </main>
     </AuthenticatedLayout>
@@ -332,6 +355,62 @@ validate.get('/more', requireSession, async (c) => {
   }), { expirationTtl: 8 * 60 * 60 });
 
   return c.redirect('/validate');
+});
+
+// Save crop data
+validate.post('/crop', requireSession, async (c) => {
+  const session = c.get('session');
+  const db = createDb(c.env.DB);
+
+  const { imageId, cropTop, cropLeft, cropWidth, cropHeight } = await c.req.json();
+
+  if (!imageId) {
+    return c.json({ error: 'Missing imageId' }, 400);
+  }
+
+
+  // Verify this image belongs to this session's batch
+  const claimedImageIds = session.claimedImageIds || [];
+  if (!claimedImageIds.includes(imageId)) {
+    return c.json({ error: 'Image not in your batch' }, 403);
+  }
+
+  await db
+    .update(schema.images)
+    .set({
+      cropTop: cropTop ?? null,
+      cropLeft: cropLeft ?? null,
+      cropWidth: cropWidth ?? null,
+      cropHeight: cropHeight ?? null,
+    })
+    .where(eq(schema.images.id, imageId));
+
+
+  return c.json({ success: true });
+});
+
+// Proxy image with CORS headers
+validate.get('/image-proxy', async (c) => {
+  const url = c.req.query('url');
+  if (!url) {
+    return c.json({ error: 'Missing url' }, 400);
+  }
+  
+  try {
+    const response = await fetch(url);
+    const data = await response.arrayBuffer();
+    const contentType = response.headers.get('content-type') || 'image/jpeg';
+    
+    return new Response(data, {
+      headers: {
+        'Content-Type': contentType,
+        'Access-Control-Allow-Origin': '*',
+        'Cache-Control': 'public, max-age=86400',
+      },
+    });
+  } catch (error) {
+    return c.json({ error: 'Failed to fetch image' }, 500);
+  }
 });
 
 export default validate;

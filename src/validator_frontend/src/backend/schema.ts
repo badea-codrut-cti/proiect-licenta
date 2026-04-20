@@ -16,6 +16,12 @@ export const images = sqliteTable('images', {
   link: text('link').notNull(),              // Image URL
   aiDescription: text('ai_description').notNull(), // AI-generated CDL description
 
+  // Cropping data - extracted from URL params or set manually
+  cropTop: integer('crop_top'),
+  cropLeft: integer('crop_left'),
+  cropWidth: integer('crop_width'),
+  cropHeight: integer('crop_height'),
+
   // First validator fields
   firstValidatorApproved: integer('first_validator_approved', { mode: 'boolean' }),
   firstValidatorModifications: text('first_validator_modifications'),

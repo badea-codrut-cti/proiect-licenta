@@ -7,12 +7,17 @@ interface LayoutProps extends PropsWithChildren {
 
 export function Layout({ title = 'CDL Validator', children }: LayoutProps) {
   return (
-    <div class="min-h-screen bg-gray-100">
-      <header class="bg-gray-800 text-white p-4 flex justify-between items-center">
-        <h1 class="text-xl font-bold">{title}</h1>
-      </header>
-      {children}
-    </div>
+    <html lang="ro">
+      <head>
+        <meta charSet="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>{title}</title>
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.2/cropper.min.css" />
+      </head>
+      <body class="min-h-screen bg-gray-100">
+        {children}
+      </body>
+    </html>
   );
 }
 
