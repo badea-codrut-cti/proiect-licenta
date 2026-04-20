@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { createSession, destroySession } from '../../backend/middleware/session';
+import { createSession, destroySession, requireSession } from '../../backend/middleware/session';
 import type { ValidatorSession } from '../../backend/types';
 import { claimBatch } from '../../backend/batch-assignment';
 import { createDb, schema } from '../../backend/schema';

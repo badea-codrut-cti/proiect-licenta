@@ -46,10 +46,6 @@ validate.get('/', requireSession, async (c) => {
   }
 
   // Get images for this session, ordered by ID for consistency
-  const completedClause = session.validatorType === 'first'
-    ? sql`${schema.images.firstValidatorApproved} IS NOT NULL`
-    : sql`${schema.images.secondValidatorApproved} IS NOT NULL`;
-
   const images = await db
     .select({
       id: schema.images.id,
@@ -61,8 +57,8 @@ validate.get('/', requireSession, async (c) => {
       cerinta: schema.problems.cerinta,
       explicatie: schema.problems.explicatie,
       isCompleted: session.validatorType === 'first'
-        ? schema.images.firstValidatorApproved
-        : schema.images.secondValidatorApproved,
+        ? sql`${schema.images.firstValidatorApproved} IS NOT NULL`
+        : sql`${schema.images.secondValidatorApproved} IS NOT NULL`,
     })
     .from(schema.images)
     .innerJoin(schema.problems, eq(schema.images.problemId, schema.problems.id))
@@ -130,9 +126,8 @@ validate.get('/', requireSession, async (c) => {
     .where(getRemainingWhereClause());
   const totalRemaining = totalRemainingResult[0]?.count || 0;
 
-  // Description to show (from first validator if second validator)
+  // Description to show to second validator (first validator's correction or original AI description)
   const description = currentImage.firstValidatorModifications || currentImage.aiDescription;
-  const showModifiedBadge = session.validatorType === 'second' && currentImage.firstValidatorModifications;
 
   return c.render(
     <AuthenticatedLayout session={session}>
@@ -154,75 +149,66 @@ validate.get('/', requireSession, async (c) => {
           <pre class="whitespace-pre-wrap">{currentImage.cerinta}</pre>
         </div>
 
-        {/* Validation Form */}
-        <form id="validationForm" class="space-y-6">
-          <input type="hidden" name="imageId" value={currentImage.id} />
+          {/* Validation Form */}
+          <form id="validationForm" class="space-y-6">
+            <input type="hidden" name="imageId" value={currentImage.id} />
 
-          <div class="grid md:grid-cols-2 gap-6">
-            {/* Image */}
-            <div class="bg-white rounded-lg shadow p-4">
-              <h3 class="font-bold mb-4">Imagine</h3>
-              <img src={currentImage.link} alt="Diagrama" class="w-full border rounded-lg" />
+            <div class="grid md:grid-cols-2 gap-6">
+              {/* Image */}
+              <div class="bg-white rounded-lg shadow p-4">
+                <h3 class="font-bold mb-4">Imagine</h3>
+                <img src={currentImage.link} alt="Diagrama" class="w-full border rounded-lg" />
+              </div>
+
+              {/* Description Editor */}
+              <div class="bg-white rounded-lg shadow p-4">
+                <h3 class="font-bold mb-2">Descriere CDL</h3>
+                <textarea
+                  id="descriptionEditor"
+                  name="modifications"
+                  rows={12}
+                  class="w-full px-4 py-2 border rounded-lg font-mono text-sm"
+                  autocomplete="off"
+                >{description}</textarea>
+              </div>
             </div>
 
-            {/* Description */}
-            <div class="bg-white rounded-lg shadow p-4">
-              <h3 class="font-bold mb-4">
-                Descriere CDL 
-                {session.validatorType === 'second' && showModifiedBadge ? '(corectată de primul validator)' : ''}
-                {session.validatorType === 'second' && !showModifiedBadge ? '(aprobată de primul validator)' : ''}
-                {session.validatorType === 'first' ? '(generată de AI)' : ''}
-              </h3>
-              <pre class="bg-gray-50 p-4 rounded border font-mono text-sm whitespace-pre-wrap max-h-96 overflow-y-auto">
-                {description}
-              </pre>
+            {/* Submit */}
+            <div class="bg-white rounded-lg shadow p-6">
+              <div class="flex flex-wrap gap-4">
+                <button
+                  type="button"
+                  onclick="submitValidation(true)"
+                  class="flex-1 min-w-48 bg-green-600 text-white py-3 px-6 rounded-lg hover:bg-green-700 transition"
+                >
+                  ✓ Aprobat
+                </button>
+                <button
+                  type="button"
+                  onclick="submitValidation(false)"
+                  class="flex-1 min-w-48 bg-yellow-600 text-white py-3 px-6 rounded-lg hover:bg-yellow-700 transition"
+                >
+                  ⚠ Corectat
+                </button>
+              </div>
             </div>
-          </div>
-
-          {/* Evaluation */}
-          <div class="bg-white rounded-lg shadow p-6">
-            <h3 class="font-bold mb-4">Evaluare</h3>
-            <div class="mb-4">
-              <label class="block font-medium mb-2">Modificări necesare</label>
-              <textarea
-                name="modifications"
-                rows={4}
-                class="w-full px-4 py-2 border rounded-lg font-mono text-sm"
-                placeholder="Dacă descrierea nu e corectă, scrie varianta corectată aici..."
-              ></textarea>
-            </div>
-            <div class="flex flex-wrap gap-4">
-              <button
-                type="button"
-                onclick="submitValidation(true)"
-                class="flex-1 min-w-48 bg-green-600 text-white py-3 px-6 rounded-lg hover:bg-green-700 transition"
-              >
-                ✓ Aprobat
-              </button>
-              <button
-                type="button"
-                onclick="submitValidation(false)"
-                class="flex-1 min-w-48 bg-yellow-600 text-white py-3 px-6 rounded-lg hover:bg-yellow-700 transition"
-              >
-                ⚠ Corectat
-              </button>
-            </div>
-          </div>
-        </form>
+          </form>
 
         {html`<script>
           async function submitValidation(isApproval) {
             const form = document.getElementById('validationForm');
             const formData = new FormData(form);
             const modifications = formData.get('modifications');
-            if (!isApproval && !modifications) {
-              alert('Trebuie să completezi câmpul cu modificările necesare.');
+            
+            if (!modifications || !modifications.trim()) {
+              alert('Trebuie să completezi descrierea CDL.');
               return;
             }
+            
             const payload = {
               imageId: parseInt(formData.get('imageId')),
               approved: isApproval,
-              modifications: isApproval ? null : modifications
+              modifications: modifications
             };
             try {
               const response = await fetch('/validate/submit', {
@@ -267,7 +253,7 @@ validate.post('/submit', requireSession, async (c) => {
       .update(schema.images)
       .set({
         firstValidatorApproved: approved,
-        firstValidatorModifications: modifications || null,
+        ...(approved ? {} : { firstValidatorModifications: modifications || null }),
       })
       .where(eq(schema.images.id, imageId));
   } else {
@@ -275,7 +261,7 @@ validate.post('/submit', requireSession, async (c) => {
       .update(schema.images)
       .set({
         secondValidatorApproved: approved,
-        secondValidatorModifications: modifications || null,
+        ...(approved ? {} : { secondValidatorModifications: modifications || null }),
       })
       .where(eq(schema.images.id, imageId));
   }
