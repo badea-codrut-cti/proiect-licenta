@@ -5,6 +5,7 @@ import type { ValidatorSession } from '../../backend/types';
 import { AuthenticatedLayout } from '../components/Layout';
 import { eq, and, inArray, sql } from 'drizzle-orm';
 import { createDb, schema } from '../../backend/schema';
+import temml from 'temml';
 
 type Variables = {
   session: ValidatorSession;
@@ -20,6 +21,35 @@ type Env = {
 };
 
 const validate = new Hono<{ Bindings: Env; Variables: Variables }>();
+
+// Render math using temml - extracts $...$ and $$...$$ for rendering
+function renderMathSafe(text: string): string {
+  // Pattern to match math delimiters: $$...$$ (display) or $...$ (inline)
+  const mathPattern = /\$\$([\s\S]+?)\$\$|\$([^$\n]+?)\$/g;
+  
+  try {
+    return text.replace(mathPattern, (match, displayMath, inlineMath) => {
+      let math = displayMath || inlineMath;
+      
+      // Pre-process: replace \mathrm{X} with just X (temml doesn't parse it properly)
+      // Also handle \text{X}, \textbf{X}, etc.
+      math = math.replace(/\\(?:mathrm|text|textbf|textit|mathbf|mathsf|rm|bf|it|tt)\{([^}]+)\}/g, '$1');
+      
+      const isDisplay = !!displayMath;
+      try {
+        const rendered = temml.renderToString(math, { 
+          displayMode: isDisplay 
+        });
+        return rendered;
+      } catch {
+        // If rendering fails, return original match
+        return match;
+      }
+    });
+  } catch {
+    return text;
+  }
+}
 
 // Validation page - uses claimed batch from session
 validate.get('/', requireSession, async (c) => {
@@ -37,7 +67,7 @@ validate.get('/', requireSession, async (c) => {
         <div class="bg-white rounded-lg shadow p-8 text-center max-w-2xl mx-auto">
           <h2 class="text-2xl font-bold mb-4">Sesiunea a expirat!</h2>
           <p class="text-gray-600 mb-6">Te rog să te autentifici din nou pentru a primi imagini.</p>
-          <form action="/auth/logout" method="POST">
+          <form action="/auth/logout" method="post">
             <button type="submit" class="bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700">Delogare</button>
           </form>
         </div>
@@ -146,7 +176,7 @@ validate.get('/', requireSession, async (c) => {
         {/* Problem Statement */}
         <div class="bg-yellow-100 border border-yellow-400 rounded-lg p-4 mb-6">
           <h3 class="font-bold mb-2">Cerință:</h3>
-          <pre class="whitespace-pre-wrap">{currentImage.cerinta}</pre>
+          <pre class="whitespace-pre-wrap" dangerouslySetInnerHTML={{ __html: renderMathSafe(currentImage.cerinta) }} />
         </div>
 
           {/* Validation Form */}
