@@ -130,6 +130,21 @@ validate.get('/', requireSession, async (c) => {
 
   const currentImage = incompleteImages[0];
 
+  let croppedUrl = currentImage.link;
+  if (currentImage.cropTop != null && currentImage.cropLeft != null && 
+      currentImage.cropWidth != null && currentImage.cropHeight != null) {
+    try {
+      const url = new URL(currentImage.link);
+      url.searchParams.set('top_left_y', String(currentImage.cropTop));
+      url.searchParams.set('top_left_x', String(currentImage.cropLeft));
+      url.searchParams.set('width', String(currentImage.cropWidth));
+      url.searchParams.set('height', String(currentImage.cropHeight));
+      croppedUrl = url.toString();
+    } catch {
+      // keep original URL
+    }
+  }
+
   // Calculate stats
   const totalInBatch = images.length;
   const remainingInBatch = incompleteImages.length;
@@ -181,71 +196,152 @@ validate.get('/', requireSession, async (c) => {
 
             var cropper = null;
             var imageId = recropBtn && recropBtn.dataset.imageId;
-            var originalSrc = recropBtn && recropBtn.dataset.imageSrc;
-
+            
+            // Get stored crop data (in original image coordinates)
+            var cropTop = recropBtn && parseInt(recropBtn.dataset.cropTop) || null;
+            var cropLeft = recropBtn && parseInt(recropBtn.dataset.cropLeft) || null;
+            var cropWidth = recropBtn && parseInt(recropBtn.dataset.cropWidth) || null;
+            var cropHeight = recropBtn && parseInt(recropBtn.dataset.cropHeight) || null;
+            
+            // Build full uncropped image URL (strip any existing crop params)
+            // This makes Mathpix return the original uncropped image
+            function getFullImageUrl(url) {
+              try {
+                var urlObj = new URL(url);
+                // Strip Mathpix crop parameters
+                urlObj.searchParams.delete('height');
+                urlObj.searchParams.delete('width');
+                urlObj.searchParams.delete('top_left_y');
+                urlObj.searchParams.delete('top_left_x');
+                return urlObj.toString();
+              } catch (e) {
+                return url;
+              }
+            }
+            
+            var originalSrc = recropBtn && recropBtn.dataset.originalSrc;
+            // fullSrc is the uncropped original image URL
+            var fullSrc = getFullImageUrl(originalSrc || '');
 
             function openCropModal() {
-              if (!cropModal) return;
+              if (!cropModal || !fullSrc) return;
+              
+              // Reset and show modal first
               cropModal.classList.remove('hidden');
-
-              setTimeout(function() {
-                if (cropper) {
-                  cropper.destroy();
-                }
-
-                var cropTarget = document.getElementById('cropTarget');
-                // Use our proxy for CORS
-                cropTarget.src = '/validate/image-proxy?url=' + encodeURIComponent(originalSrc);
-                cropper = new Cropper(cropTarget, {
-                  aspectRatio: undefined,
-                  viewMode: 0,
-                  dragMode: 'move',
-                  autoCropArea: 1,
-                  cropBoxMovable: true,
-                  cropBoxResizable: true,
-                });
-              }, 100);
-            }
-
-            function closeCropModal() {
-              if (cropModal) {
-                cropModal.classList.add('hidden');
-              }
+              
+              var cropTarget = document.getElementById('cropTarget');
+              
+              // Destroy existing cropper first
               if (cropper) {
                 cropper.destroy();
                 cropper = null;
               }
+              
+              // Set the FULL uncropped image src
+              cropTarget.src = '/validate/image-proxy?url=' + encodeURIComponent(fullSrc);
+              
+              // Wait for image to load, then init cropper
+              cropTarget.onload = function() {
+                cropper = new Cropper(cropTarget, {
+                  viewMode: 0,
+                  dragMode: 'move',
+                  autoCropArea: 0.8,
+                  movable: true,
+                  resizable: true,
+                  scalable: false,
+                  zoomable: false,
+                  ready: function() {
+                    // After image loads, set initial crop box position if we have crop data
+                    if (cropTop != null && cropLeft != null && cropWidth != null && cropHeight != null) {
+                      var imageData = cropper.getImageData();
+                      var scaleX = imageData.width / imageData.naturalWidth;
+                      var scaleY = imageData.height / imageData.naturalHeight;
+                      
+                      cropper.setCropBoxData({
+                        left: cropLeft * scaleX,
+                        top: cropTop * scaleY,
+                        width: cropWidth * scaleX,
+                        height: cropHeight * scaleY
+                      });
+                    }
+                  }
+                });
+              };
+              
+              // Fallback if image was cached
+              if (cropTarget.complete) {
+                cropTarget.onload();
+              }
             }
 
+            function closeCropModal() {
+              if (cropper) {
+                cropper.destroy();
+                cropper = null;
+              }
+              if (cropModal) {
+                cropModal.classList.add('hidden');
+              }
+              // Reset image src so it doesn't show cropped version
+              var cropTarget = document.getElementById('cropTarget');
+              if (cropTarget) {
+                cropTarget.src = '';
+              }
+            }
+                cropper = null;
+              }
+            }
             async function saveCrop() {
               if (!cropper) return;
 
-
               var cropBoxData = cropper.getCropBoxData();
+              var imageData = cropper.getImageData();
+              
+              // Convert page coordinates back to natural image coordinates
+              var scaleX = imageData.naturalWidth / imageData.width;
+              var scaleY = imageData.naturalHeight / imageData.height;
+              
               var crop = {
-                top: Math.round(cropBoxData.top),
-                left: Math.round(cropBoxData.left),
-                width: Math.round(cropBoxData.width),
-                height: Math.round(cropBoxData.height),
+                top: Math.round(cropBoxData.top * scaleY),
+                left: Math.round(cropBoxData.left * scaleX),
+                width: Math.round(cropBoxData.width * scaleX),
+                height: Math.round(cropBoxData.height * scaleY),
               };
 
-
-              try {
-                var url = new URL(originalSrc);
-                url.searchParams.set('top_left_y', String(crop.top));
-                url.searchParams.set('top_left_x', String(crop.left));
-                url.searchParams.set('width', String(crop.width));
-                url.searchParams.set('height', String(crop.height));
-                mainImage.src = url.toString();
-              } catch (e) {
-                console.error('Failed to update image URL:', e);
+              // Update the main image preview with the new crop
+              if (mainImage && originalSrc) {
+                try {
+                  var cleanUrl = getFullImageUrl(originalSrc);
+                  var url = new URL(cleanUrl);
+                  url.searchParams.set('top_left_y', String(crop.top));
+                  url.searchParams.set('top_left_x', String(crop.left));
+                  url.searchParams.set('width', String(crop.width));
+                  url.searchParams.set('height', String(crop.height));
+                  mainImage.src = '/validate/image-proxy?url=' + encodeURIComponent(url.toString());
+                } catch (e) {
+                  console.error('Failed to update image URL:', e);
+                }
               }
-
+              
               if (cropDataSpan) {
                 cropDataSpan.textContent = JSON.stringify(crop);
               }
               if (cropInfo) {
                 cropInfo.classList.remove('hidden');
+              }
+              
+              // Update local crop variables for potential re-edit
+              cropTop = crop.top;
+              cropLeft = crop.left;
+              cropWidth = crop.width;
+              cropHeight = crop.height;
+              
+              // Update the recrop button data attributes
+              if (recropBtn) {
+                recropBtn.dataset.cropTop = String(crop.top);
+                recropBtn.dataset.cropLeft = String(crop.left);
+                recropBtn.dataset.cropWidth = String(crop.width);
+                recropBtn.dataset.cropHeight = String(crop.height);
               }
 
               try {

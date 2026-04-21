@@ -7,28 +7,49 @@ interface CropData {
   cropHeight: number | null;
 }
 
-interface ValidationFormProps {
-  image: {
-    id: number;
-    link: string;
-    aiDescription: string;
-    firstValidatorModifications: string | null;
-  };
-  initialCrop?: CropData;
+interface ImageData {
+  id: number;
+  link: string;
+  aiDescription: string;
+  firstValidatorModifications: string | null;
+  cropTop: number | null;
+  cropLeft: number | null;
+  cropWidth: number | null;
+  cropHeight: number | null;
 }
 
-export function ValidationForm({ image, initialCrop }: ValidationFormProps) {
+interface ValidationFormProps {
+  image: ImageData;
+}
+
+export function ValidationForm({ image }: ValidationFormProps) {
   const description = image.firstValidatorModifications || image.aiDescription;
 
-  // Strip crop params and use our proxy for CORS
+  // Use crop data from image props to reconstruct cropped URL
+  const cropTop = image.cropTop;
+  const cropLeft = image.cropLeft;
+  const cropWidth = image.cropWidth;
+  const cropHeight = image.cropHeight;
+
   let imageUrl = image.link;
   try {
-    const url = new URL(image.link);
-    url.searchParams.delete('height');
-    url.searchParams.delete('width');
-    url.searchParams.delete('top_left_y');
-    url.searchParams.delete('top_left_x');
-    imageUrl = '/validate/image-proxy?url=' + encodeURIComponent(url.toString());
+    const baseUrl = new URL(image.link);
+    // Strip existing Mathpix crop params
+    baseUrl.searchParams.delete('height');
+    baseUrl.searchParams.delete('width');
+    baseUrl.searchParams.delete('top_left_y');
+    baseUrl.searchParams.delete('top_left_x');
+    
+    // If we have stored crop data, apply it (Mathpix will crop to our specs)
+    if (cropTop != null && cropLeft != null && cropWidth != null && cropHeight != null) {
+      baseUrl.searchParams.set('top_left_y', String(cropTop));
+      baseUrl.searchParams.set('top_left_x', String(cropLeft));
+      baseUrl.searchParams.set('width', String(cropWidth));
+      baseUrl.searchParams.set('height', String(cropHeight));
+    }
+    // Otherwise leave it as full original (no params)
+    
+    imageUrl = '/validate/image-proxy?url=' + encodeURIComponent(baseUrl.toString());
   } catch {
     imageUrl = image.link;
   }
@@ -42,8 +63,23 @@ export function ValidationForm({ image, initialCrop }: ValidationFormProps) {
             type="button"
             id="recropBtn"
             class="text-sm bg-gray-200 hover:bg-gray-300 px-3 py-1 rounded"
-            data-image-id="${image.id}"
-            data-image-src="${image.link}"
+          data-image-id="${image.id}"
+          data-crop-top="${cropTop ?? ''}"
+          data-crop-left="${cropLeft ?? ''}"
+          data-crop-width="${cropWidth ?? ''}"
+          data-crop-height="${cropHeight ?? ''}"
+          data-original-src="${(() => {
+            try {
+              const u = new URL(image.link);
+              u.searchParams.delete('height');
+              u.searchParams.delete('width');
+              u.searchParams.delete('top_left_y');
+              u.searchParams.delete('top_left_x');
+              return u.toString();
+            } catch {
+              return image.link;
+            }
+          })()}"
           >
             🔄 Recrop
           </button>
