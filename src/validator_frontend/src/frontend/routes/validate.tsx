@@ -182,7 +182,6 @@ validate.get('/', requireSession, async (c) => {
       <main class="max-w-6xl mx-auto mt-6 p-4">
           <ValidationForm image={currentImage as any} />
 
-        <script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.2/cropper.min.js"></script>
         {html`<script>
           (function() {
             var recropBtn = document.getElementById('recropBtn');
@@ -193,9 +192,10 @@ validate.get('/', requireSession, async (c) => {
             var mainImage = document.getElementById('mainImage');
             var cropInfo = document.getElementById('cropInfo');
             var cropDataSpan = document.getElementById('cropData');
+            var cropperLoading = document.getElementById('cropperLoading');
 
-            var cropper = null;
             var imageId = recropBtn && recropBtn.dataset.imageId;
+
             
             // Get stored crop data (in original image coordinates)
             var cropTop = recropBtn && parseInt(recropBtn.dataset.cropTop) || null;
@@ -203,12 +203,12 @@ validate.get('/', requireSession, async (c) => {
             var cropWidth = recropBtn && parseInt(recropBtn.dataset.cropWidth) || null;
             var cropHeight = recropBtn && parseInt(recropBtn.dataset.cropHeight) || null;
             
+            var originalSrc = recropBtn && recropBtn.dataset.originalSrc;
+            
             // Build full uncropped image URL (strip any existing crop params)
-            // This makes Mathpix return the original uncropped image
             function getFullImageUrl(url) {
               try {
                 var urlObj = new URL(url);
-                // Strip Mathpix crop parameters
                 urlObj.searchParams.delete('height');
                 urlObj.searchParams.delete('width');
                 urlObj.searchParams.delete('top_left_y');
@@ -219,93 +219,100 @@ validate.get('/', requireSession, async (c) => {
               }
             }
             
-            var originalSrc = recropBtn && recropBtn.dataset.originalSrc;
-            // fullSrc is the uncropped original image URL
             var fullSrc = getFullImageUrl(originalSrc || '');
-
-            function openCropModal() {
+            
+            // Track state across modal opens
+            var isModalOpen = false;
+            
+            async function openCropModal() {
               if (!cropModal || !fullSrc) return;
               
-              // Reset and show modal first
+              isModalOpen = true;
               cropModal.classList.remove('hidden');
               
-              var cropTarget = document.getElementById('cropTarget');
+              var selection = document.getElementById('cropperSelection');
+              var cropperImage = document.getElementById('cropperImage');
               
-              // Destroy existing cropper first
-              if (cropper) {
-                cropper.destroy();
-                cropper = null;
+              if (!selection || !cropperImage) return;
+              
+              // Set image source (this triggers load)
+              cropperImage.src = fullSrc;
+              
+              // Hide loading indicator initially
+              if (cropperLoading) cropperLoading.classList.remove('hidden');
+              
+              // Wait for image to be ready
+              await cropperImage.$ready();
+              
+              if (!isModalOpen) return; // Modal was closed while loading
+              
+              if (cropperLoading) cropperLoading.classList.add('hidden');
+              
+              // Get natural image dimensions
+              var naturalWidth = cropperImage.naturalWidth;
+              var naturalHeight = cropperImage.naturalHeight;
+              
+              // Set cropper-canvas to match image dimensions (max 90vh height)
+              var canvas = document.getElementById('modalCropperCanvas');
+              if (canvas && naturalWidth > 0 && naturalHeight > 0) {
+                var maxHeight = window.innerHeight * 0.85;
+                var maxWidth = window.innerWidth * 0.95;
+                var scale = Math.min(1, maxHeight / naturalHeight, maxWidth / naturalWidth);
+                
+                canvas.style.width = (naturalWidth * scale) + 'px';
+                canvas.style.height = (naturalHeight * scale) + 'px';
               }
               
-              // Set the FULL uncropped image src
-              cropTarget.src = '/validate/image-proxy?url=' + encodeURIComponent(fullSrc);
-              
-              // Wait for image to load, then init cropper
-              cropTarget.onload = function() {
-                cropper = new Cropper(cropTarget, {
-                  viewMode: 0,
-                  dragMode: 'move',
-                  autoCropArea: 0.8,
-                  movable: true,
-                  resizable: true,
-                  scalable: false,
-                  zoomable: false,
-                  ready: function() {
-                    // After image loads, set initial crop box position if we have crop data
-                    if (cropTop != null && cropLeft != null && cropWidth != null && cropHeight != null) {
-                      var imageData = cropper.getImageData();
-                      var scaleX = imageData.width / imageData.naturalWidth;
-                      var scaleY = imageData.height / imageData.naturalHeight;
-                      
-                      cropper.setCropBoxData({
-                        left: cropLeft * scaleX,
-                        top: cropTop * scaleY,
-                        width: cropWidth * scaleX,
-                        height: cropHeight * scaleY
-                      });
-                    }
-                  }
-                });
-              };
-              
-              // Fallback if image was cached
-              if (cropTarget.complete) {
-                cropTarget.onload();
+              // Apply stored crop data to selection (in natural image coordinates)
+              if (cropTop != null && cropLeft != null && cropWidth != null && cropHeight != null) {
+                // Crop data is already in natural image coordinates
+                selection.x = cropLeft;
+                selection.y = cropTop;
+                selection.width = cropWidth;
+                selection.height = cropHeight;
+              } else if (naturalWidth > 0 && naturalHeight > 0) {
+                // Default: cover 80% of the image
+                selection.x = naturalWidth * 0.1;
+                selection.y = naturalHeight * 0.1;
+                selection.width = naturalWidth * 0.8;
+                selection.height = naturalHeight * 0.8;
               }
             }
 
             function closeCropModal() {
-              if (cropper) {
-                cropper.destroy();
-                cropper = null;
-              }
+              isModalOpen = false;
               if (cropModal) {
                 cropModal.classList.add('hidden');
               }
-              // Reset image src so it doesn't show cropped version
-              var cropTarget = document.getElementById('cropTarget');
-              if (cropTarget) {
-                cropTarget.src = '';
-              }
-            }
-                cropper = null;
-              }
+              // Note: No destroy() needed - just hide the modal
+              // The web components handle cleanup when hidden
             }
             async function saveCrop() {
-              if (!cropper) return;
-
-              var cropBoxData = cropper.getCropBoxData();
-              var imageData = cropper.getImageData();
+              var selection = document.getElementById('cropperSelection');
+              var cropperImage = document.getElementById('cropperImage');
               
-              // Convert page coordinates back to natural image coordinates
-              var scaleX = imageData.naturalWidth / imageData.width;
-              var scaleY = imageData.naturalHeight / imageData.height;
+              if (!selection || !cropperImage) return;
+              
+              // Get display dimensions of the image (how it's rendered in the cropper)
+              var displayWidth = cropperImage.width;
+              var displayHeight = cropperImage.height;
+              var naturalWidth = cropperImage.naturalWidth;
+              var naturalHeight = cropperImage.naturalHeight;
+              
+              // Calculate scale: selection is in display coords, need original coords
+              // The image inside cropper is scaled to fit, so display dims < natural dims
+              var scaleX = displayWidth / naturalWidth;
+              var scaleY = displayHeight / naturalHeight;
+              
+              // Convert selection coordinates from display space to natural image space
+              // Note: scaleX and scaleY should be equal (image is uniformly scaled)
+              var invScale = 1 / Math.min(scaleX, scaleY || 1);
               
               var crop = {
-                top: Math.round(cropBoxData.top * scaleY),
-                left: Math.round(cropBoxData.left * scaleX),
-                width: Math.round(cropBoxData.width * scaleX),
-                height: Math.round(cropBoxData.height * scaleY),
+                left: Math.round(selection.x * invScale),
+                top: Math.round(selection.y * invScale),
+                width: Math.round(selection.width * invScale),
+                height: Math.round(selection.height * invScale),
               };
 
               // Update the main image preview with the new crop

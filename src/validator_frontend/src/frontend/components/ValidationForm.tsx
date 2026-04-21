@@ -54,6 +54,22 @@ export function ValidationForm({ image }: ValidationFormProps) {
     imageUrl = image.link;
   }
 
+  // Get full uncropped original image URL (for the crop modal)
+  let originalSrc = image.link;
+  try {
+    const u = new URL(image.link);
+    u.searchParams.delete('height');
+    u.searchParams.delete('width');
+    u.searchParams.delete('top_left_y');
+    u.searchParams.delete('top_left_x');
+    originalSrc = u.toString();
+  } catch {
+    originalSrc = image.link;
+  }
+
+  // Encode the full image URL for use in the proxy
+  const fullImageProxyUrl = '/validate/image-proxy?url=' + encodeURIComponent(originalSrc);
+
   return html`
     <div class="grid md:grid-cols-2 gap-6">
       <div class="bg-white rounded-lg shadow p-4">
@@ -68,18 +84,7 @@ export function ValidationForm({ image }: ValidationFormProps) {
           data-crop-left="${cropLeft ?? ''}"
           data-crop-width="${cropWidth ?? ''}"
           data-crop-height="${cropHeight ?? ''}"
-          data-original-src="${(() => {
-            try {
-              const u = new URL(image.link);
-              u.searchParams.delete('height');
-              u.searchParams.delete('width');
-              u.searchParams.delete('top_left_y');
-              u.searchParams.delete('top_left_x');
-              return u.toString();
-            } catch {
-              return image.link;
-            }
-          })()}"
+          data-original-src="${originalSrc}"
           >
             🔄 Recrop
           </button>
@@ -105,13 +110,31 @@ export function ValidationForm({ image }: ValidationFormProps) {
     </div>
 
     <div id="cropModal" class="fixed inset-0 bg-black/50 z-50 hidden flex items-center justify-center p-4">
-      <div class="bg-white rounded-lg shadow-lg max-w-4xl w-full max-h-[90vh] overflow-auto">
+      <div class="bg-white rounded-lg shadow-lg max-w-[90vw] max-h-[90vh] overflow-auto">
         <div class="flex justify-between items-center p-4 border-b">
           <h3 class="font-bold">Recrop Imagine</h3>
           <button type="button" id="closeCropBtn" class="text-gray-500 hover:text-gray-700">✕</button>
         </div>
-        <div class="p-4">
-          <img id="cropTarget" src="" alt="Crop target" class="max-w-full block" />
+        <div id="cropperContainer" class="p-4 flex items-center justify-center">
+          <cropper-canvas id="modalCropperCanvas" background class="h-[75vh] w-[53vh]">
+            <cropper-image id="cropperImage" src="${fullImageProxyUrl}" alt="Crop target" class="w-full"></cropper-image>
+            <cropper-shade hidden></cropper-shade>
+            <cropper-handle action="select" plain></cropper-handle>
+            <cropper-selection id="cropperSelection" initial-coverage="0.8" movable resizable>
+              <cropper-grid role="grid" covered></cropper-grid>
+              <cropper-crosshair centered></cropper-crosshair>
+              <cropper-handle action="move" theme-color="rgba(255, 255, 255, 0.35)"></cropper-handle>
+              <cropper-handle action="n-resize"></cropper-handle>
+              <cropper-handle action="e-resize"></cropper-handle>
+              <cropper-handle action="s-resize"></cropper-handle>
+              <cropper-handle action="w-resize"></cropper-handle>
+              <cropper-handle action="ne-resize"></cropper-handle>
+              <cropper-handle action="nw-resize"></cropper-handle>
+              <cropper-handle action="se-resize"></cropper-handle>
+              <cropper-handle action="sw-resize"></cropper-handle>
+            </cropper-selection>
+          </cropper-canvas>
+          <div id="cropperLoading" class="text-center py-4 text-gray-500">Se încarcă imaginea...</div>
         </div>
         <div class="p-4 border-t flex gap-4">
           <button type="button" id="saveCropBtn" class="flex-1 bg-blue-600 text-white py-2 rounded hover:bg-blue-700">
