@@ -41,7 +41,8 @@ function renderMathSafe(text: string): string {
         const rendered = temml.renderToString(math, { 
           displayMode: isDisplay 
         });
-        return rendered;
+        // Escape HTML in rendered output (temml outputs < for angles which breaks HTML)
+        return rendered.replace(/</g, '&lt;').replace(/>/g, '&gt;');
       } catch {
         // If rendering fails, return original match
         return match;
@@ -180,9 +181,81 @@ validate.get('/', requireSession, async (c) => {
   return c.render(
     <AuthenticatedLayout session={session}>
       <main class="max-w-6xl mx-auto mt-6 p-4">
+        {/* Progress */}
+        <div class="bg-white rounded-lg shadow p-4 mb-6">
+          <div class="flex justify-between mb-2">
+<span class="font-medium">Progres batch ({session.batchType === 'easy' ? 'Uşor' : 'Greu'})</span>
+<span>{completedCount} / {totalInBatch} din batch | {totalRemaining} rămase în total</span>
+          </div>
+          <div class="w-full bg-gray-200 rounded-full h-3">
+            <div class="bg-blue-600 h-3 rounded-full transition-all" style={`width: ${progressPercent}%`}></div>
+          </div>
+        </div>
+
+        {/* Problem Statement */}
+        <div class="bg-yellow-100 border border-yellow-400 rounded-lg p-4 mb-6">
+          <h3 class="font-bold mb-2">Cerinţă:</h3>
+          <textarea readonly class="w-full bg-transparent border-none resize-none font-mono text-sm" rows={4} style="background: transparent;">{currentImage.cerinta}</textarea>
+        </div>
+
           <ValidationForm image={currentImage as any} />
 
+        {/* Evaluation */}
+        <form id="validationForm" class="space-y-6">
+          <input type="hidden" name="imageId" value={currentImage.id} />
+          <div class="bg-white rounded-lg shadow p-6">
+            <div class="flex flex-wrap gap-4">
+              <button
+                type="button"
+                onclick="submitValidation(true)"
+                class="flex-1 min-w-48 bg-green-600 text-white py-3 px-6 rounded-lg hover:bg-green-700 transition"
+              >
+                ✓ Aprobat
+              </button>
+              <button
+                type="button"
+                onclick="submitValidation(false)"
+                class="flex-1 min-w-48 bg-yellow-600 text-white py-3 px-6 rounded-lg hover:bg-yellow-700 transition"
+              >
+                ⚠ Corectat
+              </button>
+            </div>
+          </div>
+        </form>
+
         {html`<script>
+          async function submitValidation(isApproval) {
+            var recropBtn = document.getElementById('recropBtn');
+            var descriptionEditor = document.getElementById('descriptionEditor');
+            var modifications = descriptionEditor ? descriptionEditor.value : '';
+            var imageId = recropBtn && recropBtn.dataset.imageId;
+            
+            if (!isApproval && (!modifications || !modifications.trim())) {
+              alert('Trebuie să completezi descrierea CDL.');
+              return;
+            }
+            
+            var payload = {
+              imageId: parseInt(imageId),
+              approved: isApproval,
+              modifications: modifications
+            };
+            try {
+              var response = await fetch('/validate/submit', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+              });
+              if (response.ok) {
+                location.reload();
+              } else {
+                alert('Eroare la trimitere. Te rog să încerci din nou.');
+              }
+            } catch (err) {
+              alert('Eroare de conexiune.');
+            }
+          }
+
           (function() {
             var recropBtn = document.getElementById('recropBtn');
             var cropModal = document.getElementById('cropModal');

@@ -115,8 +115,8 @@ export function ValidationForm({ image }: ValidationFormProps) {
           <h3 class="font-bold">Recrop Imagine</h3>
           <button type="button" id="closeCropBtn" class="text-gray-500 hover:text-gray-700">✕</button>
         </div>
-        <div id="cropperContainer" class="p-4 flex items-center justify-center">
-          <cropper-canvas id="modalCropperCanvas" background class="h-[75vh] w-[53vh]">
+        <div id="cropperContainer" class="p-4">
+          <cropper-canvas background class="w-full max-h-[70vh]">
             <cropper-image id="cropperImage" src="${fullImageProxyUrl}" alt="Crop target" class="w-full"></cropper-image>
             <cropper-shade hidden></cropper-shade>
             <cropper-handle action="select" plain></cropper-handle>
@@ -134,11 +134,11 @@ export function ValidationForm({ image }: ValidationFormProps) {
               <cropper-handle action="sw-resize"></cropper-handle>
             </cropper-selection>
           </cropper-canvas>
-          <div id="cropperLoading" class="text-center py-4 text-gray-500">Se încarcă imaginea...</div>
+          <div id="cropperLoading" class="text-center py-4 text-gray-500">Se încarcă...</div>
         </div>
         <div class="p-4 border-t flex gap-4">
           <button type="button" id="saveCropBtn" class="flex-1 bg-blue-600 text-white py-2 rounded hover:bg-blue-700">
-            Salvează crop
+            Salvează
           </button>
           <button type="button" id="cancelCropBtn" class="flex-1 bg-gray-300 text-gray-700 py-2 rounded hover:bg-gray-400">
             Anulează
