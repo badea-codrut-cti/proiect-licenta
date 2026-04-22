@@ -10,10 +10,12 @@ export default defineConfig(({ mode }) => {
         jsxImportSource: 'hono/jsx/dom',
       },
       build: {
+        outDir: 'dist/client',
         rollupOptions: {
           input: './src/client.tsx',
           output: {
             entryFileNames: 'static/client.js',
+            assetFileNames: 'static/style.[ext]',
           },
         },
         copyPublicDir: false,
@@ -23,5 +25,8 @@ export default defineConfig(({ mode }) => {
 
   return {
     plugins: [cloudflare(), tailwindcss()],
+    build: {
+      emptyOutDir: false,
+    },
   }
 })

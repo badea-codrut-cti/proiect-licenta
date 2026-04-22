@@ -22,7 +22,10 @@ export const renderer = jsxRenderer(({ children }) => {
       <body>
         {children}
         {import.meta.env.PROD ? (
-          <script type="module" src="/static/client.js"></script>
+          <>
+            <link href="/static/style.css" rel="stylesheet" />
+            <script type="module" src="/static/client.js"></script>
+          </>
         ) : (
           <script type="module" src="/src/client.tsx"></script>
         )}
