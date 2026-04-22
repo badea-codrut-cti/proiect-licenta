@@ -147,16 +147,13 @@ validate.get('/', requireSession, async (c) => {
         </div>
 
         {/* Problem Statement */}
-        <div class="bg-yellow-100 border border-yellow-400 rounded-lg p-4 mb-6">
-          <h3 class="font-bold mb-2">Cerinţă:</h3>
-          <textarea readonly class="w-full bg-transparent border-none resize-none font-mono text-sm" rows={4} style="background: transparent;">{currentImage.cerinta}</textarea>
-        </div>
-
           {/* Client-side ValidationForm mounts here */}
           <div
             id="validation-root"
             data-image={JSON.stringify({
               id: currentImage.id,
+              problemId: currentImage.problemId,
+              cerinta: currentImage.cerinta,
               link: currentImage.link,
               aiDescription: currentImage.aiDescription,
               cropTop: currentImage.cropTop,
@@ -175,9 +172,9 @@ validate.post('/submit', requireSession, async (c) => {
   const session = c.get('session');
   const db = createDb(c.env.DB);
 
-  const { imageId, approved } = await c.req.json();
+  const { imageId, problemId, approved, modifications, cerinta, cropTop, cropLeft, cropWidth, cropHeight } = await c.req.json();
 
-  if (!imageId || typeof approved !== 'boolean') {
+  if (!imageId || !problemId || typeof approved !== 'boolean') {
     return c.json({ error: 'Missing required fields' }, 400);
   }
 
@@ -187,21 +184,31 @@ validate.post('/submit', requireSession, async (c) => {
     return c.json({ error: 'Image not in your batch' }, 403);
   }
 
+  // Update Image (Crop, CDL, Approval)
+  const updateData: any = {
+    cropTop,
+    cropLeft,
+    cropWidth,
+    cropHeight,
+    aiDescription: modifications
+  };
+
   if (session.validatorType === 'first') {
-    await db
-      .update(schema.images)
-      .set({
-        firstValidatorApproved: approved,
-      })
-      .where(eq(schema.images.id, imageId));
+    updateData.firstValidatorApproved = approved;
   } else {
-    await db
-      .update(schema.images)
-      .set({
-        secondValidatorApproved: approved,
-      })
-      .where(eq(schema.images.id, imageId));
+    updateData.secondValidatorApproved = approved;
   }
+
+  await db
+    .update(schema.images)
+    .set(updateData)
+    .where(eq(schema.images.id, imageId));
+
+  // Update Problem (Cerinta)
+  await db
+    .update(schema.problems)
+    .set({ cerinta })
+    .where(eq(schema.problems.id, problemId));
 
   return c.json({ success: true });
 });
@@ -241,37 +248,9 @@ validate.get('/more', requireSession, async (c) => {
   return c.redirect('/validate');
 });
 
-// Save crop data
-validate.post('/crop', requireSession, async (c) => {
-  const session = c.get('session');
-  const db = createDb(c.env.DB);
-
-  const { imageId, cropTop, cropLeft, cropWidth, cropHeight } = await c.req.json();
-
-  if (!imageId) {
-    return c.json({ error: 'Missing imageId' }, 400);
-  }
 
 
-  // Verify this image belongs to this session's batch
-  const claimedImageIds = session.claimedImageIds || [];
-  if (!claimedImageIds.includes(imageId)) {
-    return c.json({ error: 'Image not in your batch' }, 403);
-  }
 
-  await db
-    .update(schema.images)
-    .set({
-      cropTop: cropTop ?? null,
-      cropLeft: cropLeft ?? null,
-      cropWidth: cropWidth ?? null,
-      cropHeight: cropHeight ?? null,
-    })
-    .where(eq(schema.images.id, imageId));
-
-
-  return c.json({ success: true });
-});
 
 // Proxy image with CORS headers
 validate.get('/image-proxy', async (c) => {

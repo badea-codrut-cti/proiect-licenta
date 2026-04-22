@@ -3,6 +3,8 @@ import Cropper from 'cropperjs'
 
 interface ImageData {
   id: number;
+  problemId: number;
+  cerinta: string;
   link: string;
   aiDescription: string;
   cropTop: number | null;
@@ -30,8 +32,12 @@ function stripCropParams(url: string): string {
 
 export function ValidationForm({ image }: ValidationFormProps) {
   const [description, setDescription] = useState(image.aiDescription);
+  const [cerinta, setCerinta] = useState(image.cerinta);
+  const [isEditingCerinta, setIsEditingCerinta] = useState(false);
+  
   const imgRef = useRef<HTMLImageElement | null>(null);
   const cropperRef = useRef<Cropper | null>(null);
+  const cerintaRef = useRef<HTMLDivElement | null>(null);
 
   const proxiedUrl = '/validate/image-proxy?url=' + encodeURIComponent(stripCropParams(image.link));
   const hasInitialCrop = image.cropWidth != null && image.cropHeight != null;
@@ -62,37 +68,60 @@ export function ValidationForm({ image }: ValidationFormProps) {
     };
   }, [proxiedUrl, hasInitialCrop, image.cropLeft, image.cropTop, image.cropWidth, image.cropHeight]);
 
-  const submitValidation = useCallback(async (isApproval: boolean) => {
-    if (!isApproval && (!description || !description.trim())) {
+  // Trigger MathJax render when not editing
+  useEffect(() => {
+    if (!isEditingCerinta && cerintaRef.current && (window as any).MathJax) {
+      // Clear previous MathJax output if any
+      if ((window as any).MathJax.typesetClear) {
+        (window as any).MathJax.typesetClear([cerintaRef.current]);
+      }
+      (window as any).MathJax.typesetPromise([cerintaRef.current]).catch((err: any) => console.log('MathJax error:', err));
+    }
+  }, [cerinta, isEditingCerinta]);
+
+  const submitValidation = useCallback(async () => {
+    if (!description || !description.trim()) {
       alert('Trebuie să completezi descrierea CDL.');
       return;
     }
 
     const cropper = cropperRef.current;
+    let cropData: Cropper.Data | null = null;
+    let hasCropChanged = false;
+
     if (cropper) {
-      const data = cropper.getData(true);
-      try {
-        await fetch('/validate/crop', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            imageId: image.id,
-            cropTop: data.y,
-            cropLeft: data.x,
-            cropWidth: data.width,
-            cropHeight: data.height,
-          }),
-        });
-      } catch (e) {
-        console.error('Failed to save crop:', e);
+      cropData = cropper.getData(true);
+      if (
+        cropData.x !== image.cropLeft ||
+        cropData.y !== image.cropTop ||
+        cropData.width !== image.cropWidth ||
+        cropData.height !== image.cropHeight
+      ) {
+        hasCropChanged = true;
       }
     }
+
+    const hasCerintaChanged = cerinta !== image.cerinta;
+    const hasDescriptionChanged = description !== image.aiDescription;
+
+    // If anything changed, it counts as a correction (approved = false) internally.
+    const isApproval = !(hasCropChanged || hasCerintaChanged || hasDescriptionChanged);
 
     try {
       const response = await fetch('/validate/submit', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ imageId: image.id, approved: isApproval, modifications: description }),
+        body: JSON.stringify({ 
+          imageId: image.id, 
+          problemId: image.problemId,
+          approved: isApproval, 
+          modifications: description,
+          cerinta,
+          cropTop: cropData?.y ?? null,
+          cropLeft: cropData?.x ?? null,
+          cropWidth: cropData?.width ?? null,
+          cropHeight: cropData?.height ?? null,
+        }),
       });
       if (response.ok) {
         location.reload();
@@ -102,10 +131,34 @@ export function ValidationForm({ image }: ValidationFormProps) {
     } catch {
       alert('Eroare de conexiune.');
     }
-  }, [image.id, description]);
+  }, [image, description, cerinta]);
 
   return (
     <div class="flex flex-col gap-6">
+      {/* Cerinta panel */}
+      <div class="bg-yellow-100 border border-yellow-400 rounded-lg p-4">
+        <h3 class="font-bold mb-2">Cerinţă:</h3>
+        
+        {isEditingCerinta ? (
+          <textarea
+            autoFocus
+            rows={4}
+            class="w-full bg-white border border-yellow-400 rounded p-2 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-yellow-500"
+            value={cerinta}
+            onInput={(e: any) => setCerinta(e.target.value)}
+            onBlur={() => setIsEditingCerinta(false)}
+          />
+        ) : (
+          <div 
+            ref={cerintaRef} 
+            class="w-full min-h-[4rem] text-sm text-gray-800 cursor-text py-2" 
+            onClick={() => setIsEditingCerinta(true)}
+          >
+            {cerinta}
+          </div>
+        )}
+      </div>
+
       {/* Image panel */}
       <div class="bg-white rounded-lg shadow p-4 max-w-5xl mx-auto w-full">
         <h3 class="font-bold mb-4">Imagine</h3>
@@ -138,17 +191,10 @@ export function ValidationForm({ image }: ValidationFormProps) {
         <div class="flex flex-wrap gap-4">
           <button
             type="button"
-            onClick={() => submitValidation(true)}
-            class="flex-1 min-w-48 bg-green-600 text-white py-3 px-6 rounded-lg hover:bg-green-700 transition"
+            onClick={submitValidation}
+            class="w-full bg-blue-600 text-white py-3 px-6 rounded-lg hover:bg-blue-700 transition font-bold text-lg"
           >
-            ✓ Aprobat
-          </button>
-          <button
-            type="button"
-            onClick={() => submitValidation(false)}
-            class="flex-1 min-w-48 bg-yellow-600 text-white py-3 px-6 rounded-lg hover:bg-yellow-700 transition"
-          >
-            ⚠ Corectat
+            Salvează și Continuă
           </button>
         </div>
       </div>
