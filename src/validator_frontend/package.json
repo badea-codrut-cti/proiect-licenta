@@ -16,6 +16,7 @@
     "cropperjs": "^2.1.1",
     "drizzle-orm": "^0.45.2",
     "hono": "^4.12.12",
+    "react-cropper": "^2.3.3",
     "temml": "^0.13.2"
   },
   "devDependencies": {

@@ -12,7 +12,6 @@ export function Layout({ title = 'CDL Validator', children }: LayoutProps) {
         <meta charSet="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <title>{title}</title>
-        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.2/cropper.min.css" />
       </head>
       <body class="min-h-screen bg-gray-100">
         {children}
@@ -32,28 +31,4 @@ export function CenteredLayout({ children }: PropsWithChildren) {
 interface AuthenticatedLayoutProps extends PropsWithChildren {
   title?: string;
   session: ValidatorSession;
-}
-
-export function AuthenticatedLayout({ title = 'CDL Validator', session, children }: AuthenticatedLayoutProps) {
-  return (
-    <div class="min-h-screen bg-gray-100">
-      <header class="bg-gray-800 text-white p-4 flex justify-between items-center">
-        <h1 class="text-xl font-bold">{title}</h1>
-        <div class="flex items-center gap-4">
-          <span class={`px-3 py-1 rounded-full text-sm ${session.validatorType === 'first' ? 'bg-blue-500' : 'bg-green-500'}`}>
-            {session.validatorType === 'first' ? 'Primul Validator' : 'Al Doilea Validator'}
-          </span>
-          <span class={`px-3 py-1 rounded-full text-sm ${session.batchType === 'easy' ? 'bg-yellow-500' : 'bg-pink-500'}`}>
-            {session.batchType === 'easy' ? 'Ușor' : 'Greu'}
-          </span>
-          <form action="/auth/logout" method="POST" class="inline">
-            <button type="submit" class="bg-gray-600 px-3 py-1 rounded text-sm hover:bg-gray-700">
-              Delogare
-            </button>
-          </form>
-        </div>
-      </header>
-      {children}
-    </div>
-  );
 }

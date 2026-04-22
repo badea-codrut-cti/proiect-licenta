@@ -1,4 +1,5 @@
-import { html } from 'hono/html';
+import { useState } from 'hono/jsx';
+import { render } from 'hono/jsx/dom';
 
 interface CropData {
   cropTop: number | null;
@@ -23,7 +24,7 @@ interface ValidationFormProps {
 }
 
 export function ValidationForm({ image }: ValidationFormProps) {
-  const description = image.firstValidatorModifications || image.aiDescription;
+  /*const description = image.firstValidatorModifications || image.aiDescription;
 
   // Use crop data from image props to reconstruct cropped URL
   const cropTop = image.cropTop;
@@ -70,7 +71,7 @@ export function ValidationForm({ image }: ValidationFormProps) {
   // Encode the full image URL for use in the proxy
   const fullImageProxyUrl = '/validate/image-proxy?url=' + encodeURIComponent(originalSrc);
 
-  return html`
+  return (
     <div class="grid md:grid-cols-2 gap-6">
       <div class="bg-white rounded-lg shadow p-4">
         <div class="flex justify-between items-center mb-4">
@@ -110,14 +111,14 @@ export function ValidationForm({ image }: ValidationFormProps) {
     </div>
 
     <div id="cropModal" class="fixed inset-0 bg-black/50 z-50 hidden flex items-center justify-center p-4">
-      <div class="bg-white rounded-lg shadow-lg max-w-[90vw] max-h-[90vh] overflow-auto">
+      <div class="bg-white rounded-lg shadow-lg overflow-auto">
         <div class="flex justify-between items-center p-4 border-b">
           <h3 class="font-bold">Recrop Imagine</h3>
           <button type="button" id="closeCropBtn" class="text-gray-500 hover:text-gray-700">✕</button>
         </div>
-        <div id="cropperContainer" class="p-4">
-          <cropper-canvas background class="w-full max-h-[70vh]">
-            <cropper-image id="cropperImage" src="${fullImageProxyUrl}" alt="Crop target" class="w-full"></cropper-image>
+        <div id="cropperContainer">
+          <cropper-canvas id="modalCropperCanvas" background class="w-[60vh] h-[85vh]">
+            <cropper-image id="cropperImage" src="${fullImageProxyUrl}" alt="Crop target" no-zoom zoomable="false" draggable="false" class="w-full"></cropper-image>
             <cropper-shade hidden></cropper-shade>
             <cropper-handle action="select" plain></cropper-handle>
             <cropper-selection id="cropperSelection" initial-coverage="0.8" movable resizable>
@@ -146,5 +147,5 @@ export function ValidationForm({ image }: ValidationFormProps) {
         </div>
       </div>
     </div>
-  `;
+  );*/
 }

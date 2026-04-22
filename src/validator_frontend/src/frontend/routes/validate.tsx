@@ -308,48 +308,16 @@ validate.get('/', requireSession, async (c) => {
               
               if (!selection || !cropperImage) return;
               
-              // Set image source (this triggers load)
-              cropperImage.src = fullSrc;
-              
               // Hide loading indicator initially
               if (cropperLoading) cropperLoading.classList.remove('hidden');
               
               // Wait for image to be ready
               await cropperImage.$ready();
-              
-              if (!isModalOpen) return; // Modal was closed while loading
+
+              cropperImage.zoom(0);
               
               if (cropperLoading) cropperLoading.classList.add('hidden');
               
-              // Get natural image dimensions
-              var naturalWidth = cropperImage.naturalWidth;
-              var naturalHeight = cropperImage.naturalHeight;
-              
-              // Set cropper-canvas to match image dimensions (max 90vh height)
-              var canvas = document.getElementById('modalCropperCanvas');
-              if (canvas && naturalWidth > 0 && naturalHeight > 0) {
-                var maxHeight = window.innerHeight * 0.85;
-                var maxWidth = window.innerWidth * 0.95;
-                var scale = Math.min(1, maxHeight / naturalHeight, maxWidth / naturalWidth);
-                
-                canvas.style.width = (naturalWidth * scale) + 'px';
-                canvas.style.height = (naturalHeight * scale) + 'px';
-              }
-              
-              // Apply stored crop data to selection (in natural image coordinates)
-              if (cropTop != null && cropLeft != null && cropWidth != null && cropHeight != null) {
-                // Crop data is already in natural image coordinates
-                selection.x = cropLeft;
-                selection.y = cropTop;
-                selection.width = cropWidth;
-                selection.height = cropHeight;
-              } else if (naturalWidth > 0 && naturalHeight > 0) {
-                // Default: cover 80% of the image
-                selection.x = naturalWidth * 0.1;
-                selection.y = naturalHeight * 0.1;
-                selection.width = naturalWidth * 0.8;
-                selection.height = naturalHeight * 0.8;
-              }
             }
 
             function closeCropModal() {
@@ -366,26 +334,17 @@ validate.get('/', requireSession, async (c) => {
               
               if (!selection || !cropperImage) return;
               
-              // Get display dimensions of the image (how it's rendered in the cropper)
-              var displayWidth = cropperImage.width;
-              var displayHeight = cropperImage.height;
+              // Get natural image dimensions
               var naturalWidth = cropperImage.naturalWidth;
               var naturalHeight = cropperImage.naturalHeight;
               
-              // Calculate scale: selection is in display coords, need original coords
-              // The image inside cropper is scaled to fit, so display dims < natural dims
-              var scaleX = displayWidth / naturalWidth;
-              var scaleY = displayHeight / naturalHeight;
-              
-              // Convert selection coordinates from display space to natural image space
-              // Note: scaleX and scaleY should be equal (image is uniformly scaled)
-              var invScale = 1 / Math.min(scaleX, scaleY || 1);
+              // Calculate scale: cropper is w-full, image fills it, so selection is in natural coords
               
               var crop = {
-                left: Math.round(selection.x * invScale),
-                top: Math.round(selection.y * invScale),
-                width: Math.round(selection.width * invScale),
-                height: Math.round(selection.height * invScale),
+                left: Math.round(selection.x),
+                top: Math.round(selection.y),
+                width: Math.round(selection.width),
+                height: Math.round(selection.height),
               };
 
               // Update the main image preview with the new crop
