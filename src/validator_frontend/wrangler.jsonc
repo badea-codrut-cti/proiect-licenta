@@ -1,9 +1,9 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "validator_frontend",
-  "main": "dist/index.js",
+  "main": "./src/frontend/index.tsx",
   "assets": {
-    "directory": "./dist"
+    "directory": "./dist/client"
   },
   "compatibility_date": "2026-04-09",
   "d1_databases": [

@@ -36,3 +36,4 @@ dist-server/
 # drizzle
 drizzle/
 drizzle/meta/
+worker-configuration.d.ts

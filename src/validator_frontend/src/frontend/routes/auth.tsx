@@ -133,7 +133,7 @@ auth.post('/login', async (c) => {
 });
 
 // Logout
-auth.post('/logout', requireSession, async (c) => {
+auth.get('/logout', requireSession, async (c) => {
   const session = c.get('session');
   const db = createDb(c.env.DB);
 

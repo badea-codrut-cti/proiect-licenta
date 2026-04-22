@@ -32,3 +32,22 @@ interface AuthenticatedLayoutProps extends PropsWithChildren {
   title?: string;
   session: ValidatorSession;
 }
+
+export function AuthenticatedLayout({ title, session, children }: AuthenticatedLayoutProps) {
+  return (
+    <Layout title={title}>
+      <nav class="bg-white shadow mb-4">
+        <div class="max-w-6xl mx-auto px-4 py-3 flex justify-between items-center">
+          <span class="font-bold text-lg">CDL Validator</span>
+          <div class="flex items-center gap-4">
+            <span class="text-sm text-gray-600">
+              {session.validatorType === 'first' ? 'Validator 1' : 'Validator 2'} · {session.batchType === 'easy' ? 'Uşor' : 'Greu'}
+            </span>
+            <a href="/auth/logout" class="text-sm text-red-600 hover:text-red-800">Delogare</a>
+          </div>
+        </div>
+      </nav>
+      {children}
+    </Layout>
+  );
+}

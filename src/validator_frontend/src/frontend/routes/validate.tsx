@@ -1,12 +1,10 @@
 import { Hono } from 'hono';
-import { html } from 'hono/html'
 import { requireSession } from '../../backend/middleware/session';
 import type { ValidatorSession } from '../../backend/types';
 import { AuthenticatedLayout } from '../components/Layout';
-import { ValidationForm } from '../components/ValidationForm';
 import { eq, and, inArray, sql } from 'drizzle-orm';
 import { createDb, schema } from '../../backend/schema';
-import temml from 'temml';
+
 
 type Variables = {
   session: ValidatorSession;
@@ -23,35 +21,6 @@ type Env = {
 
 const validate = new Hono<{ Bindings: Env; Variables: Variables }>();
 
-// Render math using temml - extracts $...$ and $$...$$ for rendering
-function renderMathSafe(text: string): string {
-  // Pattern to match math delimiters: $$...$$ (display) or $...$ (inline)
-  const mathPattern = /\$\$([\s\S]+?)\$\$|\$([^$\n]+?)\$/g;
-  
-  try {
-    return text.replace(mathPattern, (match, displayMath, inlineMath) => {
-      let math = displayMath || inlineMath;
-      
-      // Pre-process: replace \mathrm{X} with just X (temml doesn't parse it properly)
-      // Also handle \text{X}, \textbf{X}, etc.
-      math = math.replace(/\\(?:mathrm|text|textbf|textit|mathbf|mathsf|rm|bf|it|tt)\{([^}]+)\}/g, '$1');
-      
-      const isDisplay = !!displayMath;
-      try {
-        const rendered = temml.renderToString(math, { 
-          displayMode: isDisplay 
-        });
-        // Escape HTML in rendered output (temml outputs < for angles which breaks HTML)
-        return rendered.replace(/</g, '&lt;').replace(/>/g, '&gt;');
-      } catch {
-        // If rendering fails, return original match
-        return match;
-      }
-    });
-  } catch {
-    return text;
-  }
-}
 
 // Validation page - uses claimed batch from session
 validate.get('/', requireSession, async (c) => {
@@ -85,7 +54,6 @@ validate.get('/', requireSession, async (c) => {
       link: schema.images.link,
       aiDescription: schema.images.aiDescription,
       firstValidatorApproved: schema.images.firstValidatorApproved,
-      firstValidatorModifications: schema.images.firstValidatorModifications,
       cerinta: schema.problems.cerinta,
       explicatie: schema.problems.explicatie,
       isCompleted: session.validatorType === 'first'
@@ -131,20 +99,6 @@ validate.get('/', requireSession, async (c) => {
 
   const currentImage = incompleteImages[0];
 
-  let croppedUrl = currentImage.link;
-  if (currentImage.cropTop != null && currentImage.cropLeft != null && 
-      currentImage.cropWidth != null && currentImage.cropHeight != null) {
-    try {
-      const url = new URL(currentImage.link);
-      url.searchParams.set('top_left_y', String(currentImage.cropTop));
-      url.searchParams.set('top_left_x', String(currentImage.cropLeft));
-      url.searchParams.set('width', String(currentImage.cropWidth));
-      url.searchParams.set('height', String(currentImage.cropHeight));
-      croppedUrl = url.toString();
-    } catch {
-      // keep original URL
-    }
-  }
 
   // Calculate stats
   const totalInBatch = images.length;
@@ -198,222 +152,19 @@ validate.get('/', requireSession, async (c) => {
           <textarea readonly class="w-full bg-transparent border-none resize-none font-mono text-sm" rows={4} style="background: transparent;">{currentImage.cerinta}</textarea>
         </div>
 
-          <ValidationForm image={currentImage as any} />
-
-        {/* Evaluation */}
-        <form id="validationForm" class="space-y-6">
-          <input type="hidden" name="imageId" value={currentImage.id} />
-          <div class="bg-white rounded-lg shadow p-6">
-            <div class="flex flex-wrap gap-4">
-              <button
-                type="button"
-                onclick="submitValidation(true)"
-                class="flex-1 min-w-48 bg-green-600 text-white py-3 px-6 rounded-lg hover:bg-green-700 transition"
-              >
-                ✓ Aprobat
-              </button>
-              <button
-                type="button"
-                onclick="submitValidation(false)"
-                class="flex-1 min-w-48 bg-yellow-600 text-white py-3 px-6 rounded-lg hover:bg-yellow-700 transition"
-              >
-                ⚠ Corectat
-              </button>
-            </div>
-          </div>
-        </form>
-
-        {html`<script>
-          async function submitValidation(isApproval) {
-            var recropBtn = document.getElementById('recropBtn');
-            var descriptionEditor = document.getElementById('descriptionEditor');
-            var modifications = descriptionEditor ? descriptionEditor.value : '';
-            var imageId = recropBtn && recropBtn.dataset.imageId;
-            
-            if (!isApproval && (!modifications || !modifications.trim())) {
-              alert('Trebuie să completezi descrierea CDL.');
-              return;
-            }
-            
-            var payload = {
-              imageId: parseInt(imageId),
-              approved: isApproval,
-              modifications: modifications
-            };
-            try {
-              var response = await fetch('/validate/submit', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
-              });
-              if (response.ok) {
-                location.reload();
-              } else {
-                alert('Eroare la trimitere. Te rog să încerci din nou.');
-              }
-            } catch (err) {
-              alert('Eroare de conexiune.');
-            }
-          }
-
-          (function() {
-            var recropBtn = document.getElementById('recropBtn');
-            var cropModal = document.getElementById('cropModal');
-            var closeCropBtn = document.getElementById('closeCropBtn');
-            var saveCropBtn = document.getElementById('saveCropBtn');
-            var cancelCropBtn = document.getElementById('cancelCropBtn');
-            var mainImage = document.getElementById('mainImage');
-            var cropInfo = document.getElementById('cropInfo');
-            var cropDataSpan = document.getElementById('cropData');
-            var cropperLoading = document.getElementById('cropperLoading');
-
-            var imageId = recropBtn && recropBtn.dataset.imageId;
-
-            
-            // Get stored crop data (in original image coordinates)
-            var cropTop = recropBtn && parseInt(recropBtn.dataset.cropTop) || null;
-            var cropLeft = recropBtn && parseInt(recropBtn.dataset.cropLeft) || null;
-            var cropWidth = recropBtn && parseInt(recropBtn.dataset.cropWidth) || null;
-            var cropHeight = recropBtn && parseInt(recropBtn.dataset.cropHeight) || null;
-            
-            var originalSrc = recropBtn && recropBtn.dataset.originalSrc;
-            
-            // Build full uncropped image URL (strip any existing crop params)
-            function getFullImageUrl(url) {
-              try {
-                var urlObj = new URL(url);
-                urlObj.searchParams.delete('height');
-                urlObj.searchParams.delete('width');
-                urlObj.searchParams.delete('top_left_y');
-                urlObj.searchParams.delete('top_left_x');
-                return urlObj.toString();
-              } catch (e) {
-                return url;
-              }
-            }
-            
-            var fullSrc = getFullImageUrl(originalSrc || '');
-            
-            // Track state across modal opens
-            var isModalOpen = false;
-            
-            async function openCropModal() {
-              if (!cropModal || !fullSrc) return;
-              
-              isModalOpen = true;
-              cropModal.classList.remove('hidden');
-              
-              var selection = document.getElementById('cropperSelection');
-              var cropperImage = document.getElementById('cropperImage');
-              
-              if (!selection || !cropperImage) return;
-              
-              // Hide loading indicator initially
-              if (cropperLoading) cropperLoading.classList.remove('hidden');
-              
-              // Wait for image to be ready
-              await cropperImage.$ready();
-
-              cropperImage.zoom(0);
-              
-              if (cropperLoading) cropperLoading.classList.add('hidden');
-              
-            }
-
-            function closeCropModal() {
-              isModalOpen = false;
-              if (cropModal) {
-                cropModal.classList.add('hidden');
-              }
-              // Note: No destroy() needed - just hide the modal
-              // The web components handle cleanup when hidden
-            }
-            async function saveCrop() {
-              var selection = document.getElementById('cropperSelection');
-              var cropperImage = document.getElementById('cropperImage');
-              
-              if (!selection || !cropperImage) return;
-              
-              // Get natural image dimensions
-              var naturalWidth = cropperImage.naturalWidth;
-              var naturalHeight = cropperImage.naturalHeight;
-              
-              // Calculate scale: cropper is w-full, image fills it, so selection is in natural coords
-              
-              var crop = {
-                left: Math.round(selection.x),
-                top: Math.round(selection.y),
-                width: Math.round(selection.width),
-                height: Math.round(selection.height),
-              };
-
-              // Update the main image preview with the new crop
-              if (mainImage && originalSrc) {
-                try {
-                  var cleanUrl = getFullImageUrl(originalSrc);
-                  var url = new URL(cleanUrl);
-                  url.searchParams.set('top_left_y', String(crop.top));
-                  url.searchParams.set('top_left_x', String(crop.left));
-                  url.searchParams.set('width', String(crop.width));
-                  url.searchParams.set('height', String(crop.height));
-                  mainImage.src = '/validate/image-proxy?url=' + encodeURIComponent(url.toString());
-                } catch (e) {
-                  console.error('Failed to update image URL:', e);
-                }
-              }
-              
-              if (cropDataSpan) {
-                cropDataSpan.textContent = JSON.stringify(crop);
-              }
-              if (cropInfo) {
-                cropInfo.classList.remove('hidden');
-              }
-              
-              // Update local crop variables for potential re-edit
-              cropTop = crop.top;
-              cropLeft = crop.left;
-              cropWidth = crop.width;
-              cropHeight = crop.height;
-              
-              // Update the recrop button data attributes
-              if (recropBtn) {
-                recropBtn.dataset.cropTop = String(crop.top);
-                recropBtn.dataset.cropLeft = String(crop.left);
-                recropBtn.dataset.cropWidth = String(crop.width);
-                recropBtn.dataset.cropHeight = String(crop.height);
-              }
-
-              try {
-                await fetch('/validate/crop', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({
-                    imageId: parseInt(imageId),
-                    cropTop: crop.top,
-                    cropLeft: crop.left,
-                    cropWidth: crop.width,
-                    cropHeight: crop.height,
-                  })
-                });
-              } catch (e) {
-                console.error('Failed to save crop:', e);
-              }
-
-              closeCropModal();
-            }
-
-            if (recropBtn) recropBtn.addEventListener('click', openCropModal);
-            if (closeCropBtn) closeCropBtn.addEventListener('click', closeCropModal);
-            if (cancelCropBtn) cancelCropBtn.addEventListener('click', closeCropModal);
-            if (saveCropBtn) saveCropBtn.addEventListener('click', saveCrop);
-
-            document.addEventListener('keydown', function(e) {
-              if (e.key === 'Escape' && cropModal && !cropModal.classList.contains('hidden')) {
-                closeCropModal();
-              }
-            });
-          })();
-        </script>`}
+          {/* Client-side ValidationForm mounts here */}
+          <div
+            id="validation-root"
+            data-image={JSON.stringify({
+              id: currentImage.id,
+              link: currentImage.link,
+              aiDescription: currentImage.aiDescription,
+              cropTop: currentImage.cropTop,
+              cropLeft: currentImage.cropLeft,
+              cropWidth: currentImage.cropWidth,
+              cropHeight: currentImage.cropHeight,
+            })}
+          />
       </main>
     </AuthenticatedLayout>
   );
@@ -424,7 +175,7 @@ validate.post('/submit', requireSession, async (c) => {
   const session = c.get('session');
   const db = createDb(c.env.DB);
 
-  const { imageId, approved, modifications } = await c.req.json();
+  const { imageId, approved } = await c.req.json();
 
   if (!imageId || typeof approved !== 'boolean') {
     return c.json({ error: 'Missing required fields' }, 400);
@@ -441,7 +192,6 @@ validate.post('/submit', requireSession, async (c) => {
       .update(schema.images)
       .set({
         firstValidatorApproved: approved,
-        ...(approved ? {} : { firstValidatorModifications: modifications || null }),
       })
       .where(eq(schema.images.id, imageId));
   } else {
@@ -449,7 +199,6 @@ validate.post('/submit', requireSession, async (c) => {
       .update(schema.images)
       .set({
         secondValidatorApproved: approved,
-        ...(approved ? {} : { secondValidatorModifications: modifications || null }),
       })
       .where(eq(schema.images.id, imageId));
   }

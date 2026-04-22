@@ -1,18 +1,10 @@
-import { useState } from 'hono/jsx';
-import { render } from 'hono/jsx/dom';
-
-interface CropData {
-  cropTop: number | null;
-  cropLeft: number | null;
-  cropWidth: number | null;
-  cropHeight: number | null;
-}
+import { useState, useEffect, useRef, useCallback } from 'hono/jsx'
+import Cropper from 'cropperjs'
 
 interface ImageData {
   id: number;
   link: string;
   aiDescription: string;
-  firstValidatorModifications: string | null;
   cropTop: number | null;
   cropLeft: number | null;
   cropWidth: number | null;
@@ -23,129 +15,143 @@ interface ValidationFormProps {
   image: ImageData;
 }
 
-export function ValidationForm({ image }: ValidationFormProps) {
-  /*const description = image.firstValidatorModifications || image.aiDescription;
-
-  // Use crop data from image props to reconstruct cropped URL
-  const cropTop = image.cropTop;
-  const cropLeft = image.cropLeft;
-  const cropWidth = image.cropWidth;
-  const cropHeight = image.cropHeight;
-
-  let imageUrl = image.link;
+function stripCropParams(url: string): string {
   try {
-    const baseUrl = new URL(image.link);
-    // Strip existing Mathpix crop params
-    baseUrl.searchParams.delete('height');
-    baseUrl.searchParams.delete('width');
-    baseUrl.searchParams.delete('top_left_y');
-    baseUrl.searchParams.delete('top_left_x');
-    
-    // If we have stored crop data, apply it (Mathpix will crop to our specs)
-    if (cropTop != null && cropLeft != null && cropWidth != null && cropHeight != null) {
-      baseUrl.searchParams.set('top_left_y', String(cropTop));
-      baseUrl.searchParams.set('top_left_x', String(cropLeft));
-      baseUrl.searchParams.set('width', String(cropWidth));
-      baseUrl.searchParams.set('height', String(cropHeight));
-    }
-    // Otherwise leave it as full original (no params)
-    
-    imageUrl = '/validate/image-proxy?url=' + encodeURIComponent(baseUrl.toString());
-  } catch {
-    imageUrl = image.link;
-  }
-
-  // Get full uncropped original image URL (for the crop modal)
-  let originalSrc = image.link;
-  try {
-    const u = new URL(image.link);
+    const u = new URL(url);
     u.searchParams.delete('height');
     u.searchParams.delete('width');
     u.searchParams.delete('top_left_y');
     u.searchParams.delete('top_left_x');
-    originalSrc = u.toString();
+    return u.toString();
   } catch {
-    originalSrc = image.link;
+    return url;
   }
+}
 
-  // Encode the full image URL for use in the proxy
-  const fullImageProxyUrl = '/validate/image-proxy?url=' + encodeURIComponent(originalSrc);
+export function ValidationForm({ image }: ValidationFormProps) {
+  const [description, setDescription] = useState(image.aiDescription);
+  const imgRef = useRef<HTMLImageElement | null>(null);
+  const cropperRef = useRef<Cropper | null>(null);
+
+  const proxiedUrl = '/validate/image-proxy?url=' + encodeURIComponent(stripCropParams(image.link));
+  const hasInitialCrop = image.cropWidth != null && image.cropHeight != null;
+
+  // Initialize cropperjs on mount
+  useEffect(() => {
+    const img = imgRef.current;
+    if (!img) return;
+
+    const cropper = new Cropper(img, {
+      viewMode: 1,
+      dragMode: 'move',
+      autoCropArea: hasInitialCrop ? 1 : 0.8,
+      guides: true,
+      background: true,
+      data: hasInitialCrop ? {
+        x: image.cropLeft!,
+        y: image.cropTop!,
+        width: image.cropWidth!,
+        height: image.cropHeight!,
+      } : undefined,
+    });
+
+    cropperRef.current = cropper;
+    return () => {
+      cropper.destroy();
+      cropperRef.current = null;
+    };
+  }, [proxiedUrl, hasInitialCrop, image.cropLeft, image.cropTop, image.cropWidth, image.cropHeight]);
+
+  const submitValidation = useCallback(async (isApproval: boolean) => {
+    if (!isApproval && (!description || !description.trim())) {
+      alert('Trebuie să completezi descrierea CDL.');
+      return;
+    }
+
+    const cropper = cropperRef.current;
+    if (cropper) {
+      const data = cropper.getData(true);
+      try {
+        await fetch('/validate/crop', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            imageId: image.id,
+            cropTop: data.y,
+            cropLeft: data.x,
+            cropWidth: data.width,
+            cropHeight: data.height,
+          }),
+        });
+      } catch (e) {
+        console.error('Failed to save crop:', e);
+      }
+    }
+
+    try {
+      const response = await fetch('/validate/submit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ imageId: image.id, approved: isApproval, modifications: description }),
+      });
+      if (response.ok) {
+        location.reload();
+      } else {
+        alert('Eroare la trimitere. Te rog să încerci din nou.');
+      }
+    } catch {
+      alert('Eroare de conexiune.');
+    }
+  }, [image.id, description]);
 
   return (
-    <div class="grid md:grid-cols-2 gap-6">
-      <div class="bg-white rounded-lg shadow p-4">
-        <div class="flex justify-between items-center mb-4">
-          <h3 class="font-bold">Imagine</h3>
-          <button
-            type="button"
-            id="recropBtn"
-            class="text-sm bg-gray-200 hover:bg-gray-300 px-3 py-1 rounded"
-          data-image-id="${image.id}"
-          data-crop-top="${cropTop ?? ''}"
-          data-crop-left="${cropLeft ?? ''}"
-          data-crop-width="${cropWidth ?? ''}"
-          data-crop-height="${cropHeight ?? ''}"
-          data-original-src="${originalSrc}"
-          >
-            🔄 Recrop
-          </button>
-        </div>
-        <div id="imageContainer">
-          <img id="mainImage" src="${imageUrl}" alt="Diagrama" class="w-full border rounded-lg" />
-        </div>
-        <div id="cropInfo" class="mt-2 text-sm text-gray-500 hidden">
-          Crop: <span id="cropData"></span>
+    <div class="flex flex-col gap-6">
+      {/* Image panel */}
+      <div class="bg-white rounded-lg shadow p-4 max-w-5xl mx-auto w-full">
+        <h3 class="font-bold mb-4">Imagine</h3>
+        <div style="height: 65vh;" class="bg-gray-50 flex items-center justify-center rounded">
+          <img
+            ref={imgRef}
+            src={proxiedUrl}
+            crossorigin="anonymous"
+            alt="Diagrama"
+            style="display: block; max-width: 100%; max-height: 100%;"
+          />
         </div>
       </div>
 
-      <div class="bg-white rounded-lg shadow p-4">
+      {/* Description panel */}
+      <div class="bg-white rounded-lg shadow p-4 flex flex-col">
         <h3 class="font-bold mb-2">Descriere CDL</h3>
         <textarea
           id="descriptionEditor"
-          name="modifications"
-          rows="12"
-          class="w-full px-4 py-2 border rounded-lg font-mono text-sm"
+          rows={14}
+          class="w-full flex-1 px-4 py-2 border rounded-lg font-mono text-sm"
           autocomplete="off"
-        >${description}</textarea>
+          value={description}
+          onInput={(e: any) => setDescription(e.target.value)}
+        />
       </div>
-    </div>
 
-    <div id="cropModal" class="fixed inset-0 bg-black/50 z-50 hidden flex items-center justify-center p-4">
-      <div class="bg-white rounded-lg shadow-lg overflow-auto">
-        <div class="flex justify-between items-center p-4 border-b">
-          <h3 class="font-bold">Recrop Imagine</h3>
-          <button type="button" id="closeCropBtn" class="text-gray-500 hover:text-gray-700">✕</button>
-        </div>
-        <div id="cropperContainer">
-          <cropper-canvas id="modalCropperCanvas" background class="w-[60vh] h-[85vh]">
-            <cropper-image id="cropperImage" src="${fullImageProxyUrl}" alt="Crop target" no-zoom zoomable="false" draggable="false" class="w-full"></cropper-image>
-            <cropper-shade hidden></cropper-shade>
-            <cropper-handle action="select" plain></cropper-handle>
-            <cropper-selection id="cropperSelection" initial-coverage="0.8" movable resizable>
-              <cropper-grid role="grid" covered></cropper-grid>
-              <cropper-crosshair centered></cropper-crosshair>
-              <cropper-handle action="move" theme-color="rgba(255, 255, 255, 0.35)"></cropper-handle>
-              <cropper-handle action="n-resize"></cropper-handle>
-              <cropper-handle action="e-resize"></cropper-handle>
-              <cropper-handle action="s-resize"></cropper-handle>
-              <cropper-handle action="w-resize"></cropper-handle>
-              <cropper-handle action="ne-resize"></cropper-handle>
-              <cropper-handle action="nw-resize"></cropper-handle>
-              <cropper-handle action="se-resize"></cropper-handle>
-              <cropper-handle action="sw-resize"></cropper-handle>
-            </cropper-selection>
-          </cropper-canvas>
-          <div id="cropperLoading" class="text-center py-4 text-gray-500">Se încarcă...</div>
-        </div>
-        <div class="p-4 border-t flex gap-4">
-          <button type="button" id="saveCropBtn" class="flex-1 bg-blue-600 text-white py-2 rounded hover:bg-blue-700">
-            Salvează
+      {/* Action buttons */}
+      <div class="bg-white rounded-lg shadow p-6">
+        <div class="flex flex-wrap gap-4">
+          <button
+            type="button"
+            onClick={() => submitValidation(true)}
+            class="flex-1 min-w-48 bg-green-600 text-white py-3 px-6 rounded-lg hover:bg-green-700 transition"
+          >
+            ✓ Aprobat
           </button>
-          <button type="button" id="cancelCropBtn" class="flex-1 bg-gray-300 text-gray-700 py-2 rounded hover:bg-gray-400">
-            Anulează
+          <button
+            type="button"
+            onClick={() => submitValidation(false)}
+            class="flex-1 min-w-48 bg-yellow-600 text-white py-3 px-6 rounded-lg hover:bg-yellow-700 transition"
+          >
+            ⚠ Corectat
           </button>
         </div>
       </div>
     </div>
-  );*/
+  );
 }
