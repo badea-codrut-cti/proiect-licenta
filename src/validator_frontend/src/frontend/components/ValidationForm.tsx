@@ -38,6 +38,7 @@ export function ValidationForm({ image }: ValidationFormProps) {
   const imgRef = useRef<HTMLImageElement | null>(null);
   const cropperRef = useRef<Cropper | null>(null);
   const cerintaRef = useRef<HTMLDivElement | null>(null);
+  const previewContainerRef = useRef<HTMLDivElement | null>(null);
 
   const proxiedUrl = '/validate/image-proxy?url=' + encodeURIComponent(stripCropParams(image.link));
   const hasInitialCrop = image.cropWidth != null && image.cropHeight != null;
@@ -53,6 +54,7 @@ export function ValidationForm({ image }: ValidationFormProps) {
       autoCropArea: hasInitialCrop ? 1 : 0.8,
       guides: true,
       background: true,
+      preview: previewContainerRef.current,
       data: hasInitialCrop ? {
         x: image.cropLeft!,
         y: image.cropTop!,
@@ -160,16 +162,26 @@ export function ValidationForm({ image }: ValidationFormProps) {
       </div>
 
       {/* Image panel */}
-      <div class="bg-white rounded-lg shadow p-4 max-w-5xl mx-auto w-full">
+      <div class="bg-white rounded-lg shadow p-4 max-w-6xl mx-auto w-full">
         <h3 class="font-bold mb-4">Imagine</h3>
-        <div style="height: 65vh;" class="bg-gray-50 flex items-center justify-center rounded">
-          <img
-            ref={imgRef}
-            src={proxiedUrl}
-            crossorigin="anonymous"
-            alt="Diagrama"
-            style="display: block; max-width: 100%; max-height: 100%;"
-          />
+        <div class="flex flex-col lg:flex-row gap-4">
+          <div style="height: 65vh;" class="bg-gray-50 flex items-center justify-center rounded flex-1">
+            <img
+              ref={imgRef}
+              src={proxiedUrl}
+              crossorigin="anonymous"
+              alt="Diagrama"
+              style="display: block; max-width: 100%; max-height: 100%;"
+            />
+          </div>
+          {/* Cropper.js built-in preview */}
+          <div class="flex flex-col items-center">
+            <h4 class="text-sm font-semibold text-gray-600 mb-2">Previzualizare Selectare</h4>
+            <div 
+              ref={previewContainerRef}
+              class="w-80 h-80 border-2 border-blue-400 rounded-lg overflow-hidden bg-gray-100 shadow-inner"
+            />
+          </div>
         </div>
       </div>
 
