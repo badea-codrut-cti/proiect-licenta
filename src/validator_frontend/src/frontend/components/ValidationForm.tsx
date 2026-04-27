@@ -153,7 +153,7 @@ export function ValidationForm({ image }: ValidationFormProps) {
             />
           </div>
           {/* Cropper.js built-in preview */}
-          <div class="flex flex-col items-center mt-[40vh]">
+          <div class="flex flex-col items-center justify-end">
             <h4 class="text-sm font-semibold text-gray-600 mb-2">Previzualizare Selectare</h4>
             <div 
               ref={previewContainerRef}
