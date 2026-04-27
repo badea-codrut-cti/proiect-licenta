@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { requireSession } from '../../backend/middleware/session';
-import type { ValidatorSession } from '../../backend/types';
+import type { ValidatorSession } from '../../backend/schema';
 import { AuthenticatedLayout } from '../components/Layout';
 import { eq, and, inArray, sql } from 'drizzle-orm';
 import { createDb, schema } from '../../backend/schema';

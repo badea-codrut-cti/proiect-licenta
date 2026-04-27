@@ -1,5 +1,5 @@
 import type { Context, Next } from 'hono';
-import type { ValidatorSession } from '../types';
+import type { ValidatorSession } from '../schema';
 import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
 
 // Define the Env type inline for proper typing
@@ -56,6 +56,8 @@ export async function createSession(
     batchType,
     startedAt: Date.now(),
     sessionCompletedCount: 0,
+    claimedImageIds: [],
+    claimedAt: 0,
   };
 
   const kv = c.env.SESSIONS;

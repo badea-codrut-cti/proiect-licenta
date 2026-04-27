@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { createSession, destroySession, requireSession } from '../../backend/middleware/session';
-import type { ValidatorSession } from '../../backend/types';
+import type { ValidatorSession } from '../../backend/schema';
 import { claimBatch } from '../../backend/batch-assignment';
 import { createDb, schema } from '../../backend/schema';
 import { CenteredLayout } from '../components/Layout';

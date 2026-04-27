@@ -1,6 +1,6 @@
 import { eq, and, isNull, sql, inArray } from 'drizzle-orm';
 import { schema } from './schema';
-import type { BatchType, ValidatorType, BatchAssignment, ValidatorStats } from './types';
+import type { BatchType, ValidatorType, BatchAssignment, ValidatorStats } from './schema';
 
 export interface BatchAssignmentConfig {
   easyMaxLines: number;
@@ -71,7 +71,7 @@ export async function claimBatch(
     return { sessionId, imageIds: [], totalRemaining, stats: { claimed: 0, completed: 0, totalRemaining: 0 } };
   }
 
-  const imageIds = unclaimedImages.map(img => img.id);
+  const imageIds = unclaimedImages.map((img: any) => img.id);
 
   // Claim images atomically
   if (validatorType === 'first') {
@@ -96,7 +96,7 @@ export async function claimBatch(
     .where(eq(sessionIdField, sessionId));
 
   const claimed = allSessionImages.length;
-  const completed = allSessionImages.filter(img => img.approved !== null).length;
+  const completed = allSessionImages.filter((img: any) => img.approved !== null).length;
 
   return {
     sessionId,

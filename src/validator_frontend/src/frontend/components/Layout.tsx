@@ -1,5 +1,5 @@
 import type { PropsWithChildren } from 'hono/jsx';
-import type { ValidatorSession } from '../backend/types';
+import type { ValidatorSession } from '../../backend/schema';
 
 interface LayoutProps extends PropsWithChildren {
   title?: string;
