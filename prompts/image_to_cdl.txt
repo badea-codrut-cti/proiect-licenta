@@ -17,11 +17,17 @@ Point(A, x, y, z): Declares a point A at coordinates (x, y, z) in 3D.
 Line(A, B): Declares a line segment between A and B.
 Angle(A, B, C): Declares an angle with vertex B.
 Triangle(A, B, C): Declares a triangle formed by A, B, and C.
+Polygon(A, B, C, ...): N sided polygon.
+Convex(Polygon(A, B, C, D)): Polygon ABCD is convex.
+Concave(Polygon(A, B, C, D)): Polygon ABCD is concave.
 ObtuseTriangle(A, B, C): Declares an obtuse-angled triangle (one angle > 90deg).
 AcuteTriangle(A, B, C): Declares an acute-angled triangle (all angles < 90deg).
 RightTriangle(A, B, C): Declares a right-angled triangle (one angle = 90deg).
 Parallelogram(J, K, L, M): Declares a parallelogram.
 Square(A, B, C, D): Declares a square.
+Rhombus(A, B, C, D): Declares a rhombus.
+Rectangle(A, B, C, D): Declares a rectangle.
+Trapezoid(Line(A, B), Line(C, D)): Trapezoid with basis AB and CD, AB and CD are parallel.
 Circle(K): Declares a circle with center K.
 Arc(M, N): Declares an arc between points M and N.
 Centroid(Triangle(A, B, C), G): G is the centroid of triangle ABC (intersection of medians).
@@ -37,6 +43,7 @@ Parallelepiped(A, B, C, D, E, F, G, H): Declares a parallelepiped (6-faced polyh
 Sphere(K): Declares a sphere with center K.
 Cylinder(K): Declares a cylinder (K is the center of one base).
 Cone(K): Declares a cone (K is the center of the base).
+Prism(Polygon(A, B, C, D, E), Polygon(A', B', C', D' E')).
 
 ## Structural Relations
 
@@ -47,6 +54,7 @@ InsideOf(Point(M), Parallelogram(A, B, C, D)): Point M is inside the parallelogr
 InsideOf(Point(M), Circle(K)): Point M is inside circle K (not on the circumference).
 InsideOf(Point(M), Square(A, B, C, D)): Point M is inside square ABCD.
 InsideOf(Figure1, Figure2): Figure1 is entirely inside Figure2. Use when a smaller figure (e.g., triangle, square, circle) is drawn inside a larger one.
+InsideOf(Point(M), Angle(A, O, B)): Line OM is between OA and OB.
 
 PointOnLine(D, Line(A, C)): Point D is on the line segment AC.
 PointOnCircle(M, Circle(K)): Point M is on the circumference of circle K.
@@ -61,6 +69,7 @@ Midpoint(M, Line(A, B)): M is the midpoint of line AB.
 Circumcircle(Circle(K), Triangle(A, B, C)): Circle K passes through triangle ABC vertices.
 Altitude(Line(A, D), Triangle(A, B, C)): Line AD is an altitude of triangle ABC (dropped from vertex A perpendicular to side BC).
 TangentTo(Line(M, N), Circle(K)): Line MN is tangent to circle K.
+Coplanar(Point(A), Point(B), Point(C), Point(D), ...): N objects are on the same plane (lines, points, etc).
 
 ## Semantic Measurements
 
@@ -68,6 +77,7 @@ Equals(LengthOf(Line(M, N)), 16): The length of line MN is 16.
 Equals(LengthOf(Line(C, D)), x): The length of line CD is the variable x.
 Equals(Radius(Circle(K), 4): Circle K has a radius of 4.
 Equals(MeasureOf(Angle(C, A, B)), 54): Angle CAB is 54 degrees.
+Equals(MeasureOf(Angle(Line(O, M), Line(A, C'))), 60): The angle between the line parallel with AC' that intersects with OM is 60 degrees.
 Equals(MeasureOf(Arc(M, N)), 98): The arc MN is 98 degrees.
 Equals(PerimeterOf(Triangle(A, B, C)), 40): The perimeter is 40.
 Equals(AreaOf(Square(A, B, C, D)), 100): The area is 100.
@@ -79,16 +89,25 @@ EqualsRatio(LengthOf(Line(A, B)), LengthOf(Line(C, D)), 2): AB / CD = 2 (AB is t
 EqualsRatio(LengthOf(Line(A, D)), LengthOf(Line(A, B)), 3): AD / AB = 3.
 EqualsRatio(MeasureOf(Angle(A, B, C)), MeasureOf(Angle(D, E, F)), 2): Angle ABC is twice angle DEF.
 Equals(X, Sum(Y, Z)): X equals Y + Z. Example: Equals(LengthOf(Line(A, B)), Sum(LengthOf(Line(A, D)), LengthOf(Line(D, C)))) means AB = AD + DC.
+Equals(Prod(LengthOf(Line(A, B)), LengthOf(Line(C, D))), Prod(LengthOf(Line(M, N)), LengthOf(Line(E, F)))): AB * CD = MN * EF.
 Equals(X, Diff(Y, Z)): X equals Y - Z.
 NotEquals(X, Y): X is not equal to Y.
+Not(K): The statement K is not true.
+Not(InsideOf(Point(M), Angle(A, O, B))): Point M is not inside ANgle AOB.
 GreaterThan(X, Y): X > Y.
 LowerThan(X, Y): X < Y.
 GreaterThanEquals(X, Y): X >= Y.
 LowerThanEquals(X, Y): X <= Y.
+Constant(a)
+IsPrime(Constant(a), true)
+Equals(Constant(a), Sum(LengthOf(Line(A, B), Line(C, D)))
+Equals(Prod(Constant(a), MeasureOf(Angle(A, B, C)), Sum(Prod(Constant(b), MeasureOf(Angle(D, E, F)), Prod(Constant(c), MeasureOf(G, H, I))))
 Latex(formula): Represents an arbitrary LaTeX mathematical expression. Can be used in Equals predicates:
 - Equals(LengthOf(Line(A, B)), Latex(\sqrt[3]{37})): AB equals the cube root of 37.
 - Equals(MeasureOf(Angle(A, B, C)), Latex(\frac{\pi}{4})): Angle ABC equals pi/4 radians.
 - Equals(LengthOf(Line(A, B)), Latex(x^2 + 2x + 1))
+- Equals(Constant(a), Latex(\sqrt[3]{62}))
+
 
 ## Handling Unknown/Unrepresentable Content
 
@@ -137,7 +156,8 @@ Why the CDL looks like this:
 - Variable names: OCR may confuse `x` with `×`, `O` with `0`, or `l` with `1`. Context matters.
 - Degree symbols: `°`, `ᵒ`, or even `0` after a number may mean degrees.
 - Unicode symbols: `°` (degree sign), `∏` (product), `∑` (sum) may appear.
-- Fractions: `rac{a}{b}` should be interpreted as `a/b`.
+- Fractions: `
+rac{a}{b}` should be interpreted as `a/b`.
 
 ## Context
 

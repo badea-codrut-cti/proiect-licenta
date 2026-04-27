@@ -138,6 +138,31 @@ export function ValidationForm({ image }: ValidationFormProps) {
   return (
     <div class="flex flex-col gap-6">
       {/* Cerinta panel */}
+
+      {/* Image panel */}
+      <div class="bg-white rounded-lg shadow p-4 max-w-6xl mx-auto w-full">
+        <h3 class="font-bold mb-4">Imagine</h3>
+        <div class="flex flex-col lg:flex-row gap-4">
+          <div style="height: 65vh;" class="bg-gray-50 flex items-center justify-center rounded flex-1">
+            <img
+              ref={imgRef}
+              src={proxiedUrl}
+              crossorigin="anonymous"
+              alt="Diagrama"
+              style="display: block; max-width: 100%; max-height: 100%;"
+            />
+          </div>
+          {/* Cropper.js built-in preview */}
+          <div class="flex flex-col items-center mt-[40vh]">
+            <h4 class="text-sm font-semibold text-gray-600 mb-2">Previzualizare Selectare</h4>
+            <div 
+              ref={previewContainerRef}
+              class="w-80 h-80 border-2 border-blue-400 rounded-lg overflow-hidden bg-gray-100 shadow-inner"
+            />
+          </div>
+        </div>
+      </div>
+
       <div class="bg-yellow-100 border border-yellow-400 rounded-lg p-4">
         <h3 class="font-bold mb-2">Cerinţă:</h3>
         
@@ -161,29 +186,6 @@ export function ValidationForm({ image }: ValidationFormProps) {
         )}
       </div>
 
-      {/* Image panel */}
-      <div class="bg-white rounded-lg shadow p-4 max-w-6xl mx-auto w-full">
-        <h3 class="font-bold mb-4">Imagine</h3>
-        <div class="flex flex-col lg:flex-row gap-4">
-          <div style="height: 65vh;" class="bg-gray-50 flex items-center justify-center rounded flex-1">
-            <img
-              ref={imgRef}
-              src={proxiedUrl}
-              crossorigin="anonymous"
-              alt="Diagrama"
-              style="display: block; max-width: 100%; max-height: 100%;"
-            />
-          </div>
-          {/* Cropper.js built-in preview */}
-          <div class="flex flex-col items-center">
-            <h4 class="text-sm font-semibold text-gray-600 mb-2">Previzualizare Selectare</h4>
-            <div 
-              ref={previewContainerRef}
-              class="w-80 h-80 border-2 border-blue-400 rounded-lg overflow-hidden bg-gray-100 shadow-inner"
-            />
-          </div>
-        </div>
-      </div>
 
       {/* Description panel */}
       <div class="bg-white rounded-lg shadow p-4 flex flex-col">
