@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { requireSession } from '../../backend/middleware/session';
-import type { ValidatorSession } from '../../backend/schema';
+import type { ValidatorSession, Env } from '../../backend/schema';
 import { AuthenticatedLayout } from '../components/Layout';
 import { eq, and, inArray, sql } from 'drizzle-orm';
 import { createDb, schema } from '../../backend/schema';
@@ -11,13 +11,7 @@ type Variables = {
   sessionId: string;
 };
 
-type Env = {
-  SESSIONS: KVNamespace;
-  DB: D1Database;
-  EASY_MAX_LINES: string;
-  EASY_BATCH_SIZE: string;
-  HARD_BATCH_SIZE: string;
-};
+
 
 const validate = new Hono<{ Bindings: Env; Variables: Variables }>();
 
@@ -46,37 +40,45 @@ validate.get('/', requireSession, async (c) => {
     );
   }
 
-  // Get images for this session, ordered by ID for consistency
-  const images = await db
-    .select({
-      id: schema.images.id,
-      problemId: schema.images.problemId,
-      link: schema.images.link,
-      aiDescription: schema.images.aiDescription,
-      firstValidatorApproved: schema.images.firstValidatorApproved,
-      cerinta: schema.problems.cerinta,
-      explicatie: schema.problems.explicatie,
-      isCompleted: session.validatorType === 'first'
-        ? sql`${schema.images.firstValidatorApproved} IS NOT NULL`
-        : sql`${schema.images.secondValidatorApproved} IS NOT NULL`,
-      // Crop data
-      cropTop: schema.images.cropTop,
-      cropLeft: schema.images.cropLeft,
-      cropWidth: schema.images.cropWidth,
-      cropHeight: schema.images.cropHeight,
-    })
-    .from(schema.images)
-    .innerJoin(schema.problems, eq(schema.images.problemId, schema.problems.id))
-    .where(
-      and(
-        inArray(schema.images.id, claimedImageIds),
-        // Filter by easy/hard based on session's batchType
-        session.batchType === 'easy'
-          ? sql`${schema.problems.instructionCount} <= ${easyMaxLines}`
-          : sql`${schema.problems.instructionCount} > ${easyMaxLines}`
+  // Get images from session cache if available
+  let images = session.claimedImagesData;
+
+  if (!images && claimedImageIds.length > 0) {
+    // Fallback: populate cache if missing
+    images = await db
+      .select({
+        id: schema.images.id,
+        problemId: schema.images.problemId,
+        link: schema.images.link,
+        aiDescription: schema.images.aiDescription,
+        firstValidatorApproved: schema.images.firstValidatorApproved,
+        cerinta: schema.problems.cerinta,
+        explicatie: schema.problems.explicatie,
+        isCompleted: session.validatorType === 'first'
+          ? sql`${schema.images.firstValidatorApproved} IS NOT NULL`
+          : sql`${schema.images.secondValidatorApproved} IS NOT NULL`,
+        cropTop: schema.images.cropTop,
+        cropLeft: schema.images.cropLeft,
+        cropWidth: schema.images.cropWidth,
+        cropHeight: schema.images.cropHeight,
+      })
+      .from(schema.images)
+      .innerJoin(schema.problems, eq(schema.images.problemId, schema.problems.id))
+      .where(
+        and(
+          inArray(schema.images.id, claimedImageIds),
+          session.batchType === 'easy'
+            ? sql`${schema.problems.instructionCount} <= ${easyMaxLines}`
+            : sql`${schema.problems.instructionCount} > ${easyMaxLines}`
+        )
       )
-    )
-    .orderBy(schema.images.id);
+      .orderBy(schema.images.id);
+
+    session.claimedImagesData = images;
+    await c.env.SESSIONS.put(c.get('sessionId'), JSON.stringify(session), { expirationTtl: 8 * 60 * 60 });
+  }
+
+  images = images || [];
 
   // Filter out completed images client-side (from the claimed batch)
   const incompleteImages = images.filter(img => !img.isCompleted);
@@ -105,32 +107,38 @@ validate.get('/', requireSession, async (c) => {
   const remainingInBatch = incompleteImages.length;
   const progressPercent = totalInBatch > 0 ? ((totalInBatch - remainingInBatch) / totalInBatch) * 100 : 100;
 
-  // Get total remaining for this validator type/difficulty
-  const getRemainingWhereClause = () => {
-    if (session.validatorType === 'first') {
-      return and(
-        sql`${schema.images.firstValidatorApproved} IS NULL`,
-        session.batchType === 'easy'
-          ? sql`${schema.problems.instructionCount} <= ${easyMaxLines}`
-          : sql`${schema.problems.instructionCount} > ${easyMaxLines}`
-      );
-    } else {
-      return and(
-        eq(schema.images.firstValidatorApproved, true),
-        sql`${schema.images.secondValidatorApproved} IS NULL`,
-        session.batchType === 'easy'
-          ? sql`${schema.problems.instructionCount} <= ${easyMaxLines}`
-          : sql`${schema.problems.instructionCount} > ${easyMaxLines}`
-      );
-    }
-  };
+  let totalRemaining = session.totalRemaining;
 
-  const totalRemainingResult = await db
-    .select({ count: sql<number>`count(*)` })
-    .from(schema.images)
-    .innerJoin(schema.problems, eq(schema.images.problemId, schema.problems.id))
-    .where(getRemainingWhereClause());
-  const totalRemaining = totalRemainingResult[0]?.count || 0;
+  if (totalRemaining === undefined) {
+    const getRemainingWhereClause = () => {
+      if (session.validatorType === 'first') {
+        return and(
+          sql`${schema.images.firstValidatorApproved} IS NULL`,
+          session.batchType === 'easy'
+            ? sql`${schema.problems.instructionCount} <= ${easyMaxLines}`
+            : sql`${schema.problems.instructionCount} > ${easyMaxLines}`
+        );
+      } else {
+        return and(
+          eq(schema.images.firstValidatorApproved, true),
+          sql`${schema.images.secondValidatorApproved} IS NULL`,
+          session.batchType === 'easy'
+            ? sql`${schema.problems.instructionCount} <= ${easyMaxLines}`
+            : sql`${schema.problems.instructionCount} > ${easyMaxLines}`
+        );
+      }
+    };
+
+    const totalRemainingResult = await db
+      .select({ count: sql<number>`count(*)` })
+      .from(schema.images)
+      .innerJoin(schema.problems, eq(schema.images.problemId, schema.problems.id))
+      .where(getRemainingWhereClause());
+    totalRemaining = totalRemainingResult[0]?.count || 0;
+    
+    session.totalRemaining = totalRemaining;
+    await c.env.SESSIONS.put(c.get('sessionId'), JSON.stringify(session), { expirationTtl: 8 * 60 * 60 });
+  }
 
   return c.render(
     <AuthenticatedLayout session={session}>
@@ -210,6 +218,24 @@ validate.post('/submit', requireSession, async (c) => {
     .set({ cerinta })
     .where(eq(schema.problems.id, problemId));
 
+  // Update session cache
+  if (session.claimedImagesData) {
+    const img = session.claimedImagesData.find(i => i.id === imageId);
+    if (img) {
+      img.isCompleted = true;
+      img.aiDescription = modifications;
+      img.cerinta = cerinta;
+      img.cropTop = cropTop;
+      img.cropLeft = cropLeft;
+      img.cropWidth = cropWidth;
+      img.cropHeight = cropHeight;
+    }
+  }
+  if (session.totalRemaining !== undefined) {
+    session.totalRemaining = Math.max(0, session.totalRemaining - 1);
+  }
+  await c.env.SESSIONS.put(c.get('sessionId'), JSON.stringify(session), { expirationTtl: 8 * 60 * 60 });
+
   return c.json({ success: true });
 });
 
@@ -237,11 +263,36 @@ validate.get('/more', requireSession, async (c) => {
     return c.redirect('/validate');
   }
 
+  // Fetch full image data for caching
+  const imagesData = await db
+    .select({
+      id: schema.images.id,
+      problemId: schema.images.problemId,
+      link: schema.images.link,
+      aiDescription: schema.images.aiDescription,
+      firstValidatorApproved: schema.images.firstValidatorApproved,
+      cerinta: schema.problems.cerinta,
+      explicatie: schema.problems.explicatie,
+      isCompleted: session.validatorType === 'first'
+        ? sql`${schema.images.firstValidatorApproved} IS NOT NULL`
+        : sql`${schema.images.secondValidatorApproved} IS NOT NULL`,
+      cropTop: schema.images.cropTop,
+      cropLeft: schema.images.cropLeft,
+      cropWidth: schema.images.cropWidth,
+      cropHeight: schema.images.cropHeight,
+    })
+    .from(schema.images)
+    .innerJoin(schema.problems, eq(schema.images.problemId, schema.problems.id))
+    .where(inArray(schema.images.id, batchAssignment.imageIds))
+    .orderBy(schema.images.id);
+
   // Update session with new claimed images
   const kv = c.env.SESSIONS;
   await kv.put(sessionId, JSON.stringify({
     ...session,
     claimedImageIds: batchAssignment.imageIds,
+    claimedImagesData: imagesData,
+    totalRemaining: batchAssignment.totalRemaining,
     claimedAt: Date.now(),
   }), { expirationTtl: 8 * 60 * 60 });
 

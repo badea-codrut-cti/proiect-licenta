@@ -7,6 +7,8 @@ export const problems = sqliteTable('problems', {
   cerinta: text('cerinta').notNull(),
   explicatie: text('explicatie').notNull(),
   instructionCount: integer('instruction_count').notNull(),
+  firstValidatorSessionId: text('first_validator_session_id'),
+  secondValidatorSessionId: text('second_validator_session_id'),
 });
 
 export const images = sqliteTable('images', {
@@ -36,14 +38,31 @@ export function createDb(d1: D1Database) {
   return drizzle(d1, { schema });
 }
 
+export interface ClaimedImageData {
+  id: number;
+  problemId: number;
+  link: string;
+  aiDescription: string;
+  firstValidatorApproved: boolean | null;
+  cerinta: string;
+  explicatie: string;
+  isCompleted: boolean;
+  cropTop: number | null;
+  cropLeft: number | null;
+  cropWidth: number | null;
+  cropHeight: number | null;
+}
+
 export interface ValidatorSession {
   sessionId: string;
   validatorType: 'first' | 'second';
   startedAt: number;
   batchType: 'easy' | 'hard';
   sessionCompletedCount: number;
-  
+
   claimedImageIds: number[];
+  claimedImagesData?: ClaimedImageData[];
+  totalRemaining?: number;
   claimedAt: number;
 }
 
@@ -77,3 +96,12 @@ export interface BatchAssignment {
   imageIds: number[];     // IDs of images assigned to this session
   totalRemaining: number;// Total remaining for this validator type/difficulty
 }
+
+export type Env = {
+  SESSIONS: KVNamespace;
+  DB: D1Database;
+  VALIDATOR_PASSWORD: string;
+  EASY_MAX_LINES: string;
+  EASY_BATCH_SIZE: string;
+  HARD_BATCH_SIZE: string;
+};

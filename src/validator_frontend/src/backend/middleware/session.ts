@@ -1,15 +1,8 @@
 import type { Context, Next } from 'hono';
-import type { ValidatorSession } from '../schema';
+import type { ValidatorSession, Env } from '../schema';
 import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
 
-// Define the Env type inline for proper typing
-type Env = {
-  SESSIONS: KVNamespace;
-  DB: D1Database;
-  EASY_MAX_LINES: string;
-  EASY_BATCH_SIZE: string;
-  HARD_BATCH_SIZE: string;
-};
+
 
 type AppContext = Context<{ Bindings: Env; Variables: { session: ValidatorSession; sessionId: string } }>;
 

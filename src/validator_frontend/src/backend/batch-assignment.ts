@@ -38,6 +38,12 @@ export async function claimBatch(
       return and(
         isNull(schema.images.firstValidatorApproved),
         isNull(schema.images.firstValidatorSessionId),
+        sql`${schema.images.problemId} NOT IN (
+          SELECT problem_id FROM images 
+          WHERE first_validator_session_id IS NOT NULL 
+          AND first_validator_session_id != ${sessionId}
+          AND first_validator_approved IS NULL
+        )`,
         ...baseFilters
       );
     } else {
@@ -46,6 +52,12 @@ export async function claimBatch(
         sql`${schema.images.firstValidatorApproved} IS NOT NULL`,
         isNull(schema.images.secondValidatorApproved),
         isNull(schema.images.secondValidatorSessionId),
+        sql`${schema.images.problemId} NOT IN (
+          SELECT problem_id FROM images 
+          WHERE second_validator_session_id IS NOT NULL 
+          AND second_validator_session_id != ${sessionId}
+          AND second_validator_approved IS NULL
+        )`,
         ...baseFilters
       );
     }

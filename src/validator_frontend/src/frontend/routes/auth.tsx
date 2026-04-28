@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { createSession, destroySession, requireSession } from '../../backend/middleware/session';
-import type { ValidatorSession } from '../../backend/schema';
+import type { ValidatorSession, Env } from '../../backend/schema';
 import { claimBatch } from '../../backend/batch-assignment';
 import { createDb, schema } from '../../backend/schema';
 import { CenteredLayout } from '../components/Layout';
@@ -10,14 +10,7 @@ type Variables = {
   sessionId: string;
 };
 
-type Env = {
-  SESSIONS: KVNamespace;
-  DB: D1Database;
-  VALIDATOR_PASSWORD: string;
-  EASY_MAX_LINES: string;
-  EASY_BATCH_SIZE: string;
-  HARD_BATCH_SIZE: string;
-};
+
 
 const auth = new Hono<{ Bindings: Env; Variables: Variables }>();
 
@@ -27,7 +20,7 @@ auth.get('/login', async (c) => {
     <CenteredLayout>
       <div class="bg-white rounded-lg shadow-lg p-8 w-full max-w-md">
         <h2 class="text-2xl font-bold mb-6 text-center">Autentificare</h2>
-        <form action="/auth/login" method="POST">
+        <form action="/auth/login" method="post">
           <div class="mb-4">
             <label class="block text-gray-700 font-medium mb-2" for="password">Parolă</label>
             <input
@@ -121,7 +114,7 @@ auth.post('/login', async (c) => {
         <div class="bg-white rounded-lg shadow-lg p-8 w-full max-w-md text-center">
           <h2 class="text-xl font-bold mb-4">Nu mai sunt imagini disponibile!</h2>
           <p class="text-gray-600 mb-6">Nu există imagini de validat pentru acest tip de validator și dificultate.</p>
-          <form action="/auth/logout" method="POST">
+          <form action="/auth/logout" method="post">
             <button type="submit" class="bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700">Delogare</button>
           </form>
         </div>

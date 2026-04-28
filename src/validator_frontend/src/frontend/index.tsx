@@ -5,14 +5,7 @@ import auth from './routes/auth';
 import validate from './routes/validate';
 import '../style.css';
 
-type Env = {
-  SESSIONS: KVNamespace;
-  DB: D1Database;
-  VALIDATOR_PASSWORD: string;
-  EASY_MAX_LINES: string;
-  EASY_BATCH_SIZE: string;
-  HARD_BATCH_SIZE: string;
-};
+import type { Env } from '../backend/schema';
 
 const app = new Hono<{ Bindings: Env }>();
 
