@@ -1,18 +1,12 @@
 import { Hono } from 'hono';
-import { createSession, destroySession, requireSession } from '../../backend/middleware/session';
-import type { ValidatorSession, Env } from '../../backend/schema';
-import { claimBatch } from '../../backend/batch-assignment';
-import { createDb, schema } from '../../backend/schema';
-import { CenteredLayout } from '../components/Layout';
+import { createSession, destroySession, requireSession, updateSession } from '../../backend/middleware/session';
+import type { AppVariables } from '../../backend/middleware/session';
+import type { Env, ValidatorType, BatchType } from '../../backend/schema';
+import { claimBatch, getBatchConfig } from '../../backend/batch-assignment';
+import { createDb } from '../../backend/schema';
+import { CenteredLayout, StatusMessage } from '../components/Layout';
 
-type Variables = {
-  session: ValidatorSession;
-  sessionId: string;
-};
-
-
-
-const auth = new Hono<{ Bindings: Env; Variables: Variables }>();
+const auth = new Hono<{ Bindings: Env; Variables: AppVariables }>();
 
 // Login page
 auth.get('/login', async (c) => {
@@ -71,8 +65,8 @@ auth.get('/login', async (c) => {
 auth.post('/login', async (c) => {
   const body = await c.req.formData();
   const password = body.get('password') as string;
-  const validatorType = body.get('validatorType') as 'first' | 'second';
-  const batchType = body.get('batchType') as 'easy' | 'hard';
+  const validatorType = body.get('validatorType') as ValidatorType;
+  const batchType = body.get('batchType') as BatchType;
 
   if (password !== c.env.VALIDATOR_PASSWORD) {
     return c.render(
@@ -86,47 +80,38 @@ auth.post('/login', async (c) => {
   }
 
   const db = createDb(c.env.DB);
-  const easyMaxLines = parseInt(c.env.EASY_MAX_LINES || '10', 10);
-  const easyBatchSize = parseInt(c.env.EASY_BATCH_SIZE || '20', 10);
-  const hardBatchSize = parseInt(c.env.HARD_BATCH_SIZE || '5', 10);
+  const config = getBatchConfig(c.env);
 
   // Create session first
   const session = await createSession(c, validatorType, batchType);
 
   // Claim a batch of images atomically
-  const batchAssignment = await claimBatch(db, session.sessionId, validatorType, batchType, {
-    easyMaxLines,
-    easyBatchSize,
-    hardBatchSize,
-  });
+  const batchAssignment = await claimBatch(db, session.sessionId, validatorType, batchType, config);
 
   // Update session with claimed image IDs
-  const kv = c.env.SESSIONS;
-  await kv.put(session.sessionId, JSON.stringify({
-    ...session,
+  await updateSession(c, {
     claimedImageIds: batchAssignment.imageIds,
     claimedAt: Date.now(),
-  }), { expirationTtl: 8 * 60 * 60 });
+  });
 
   if (batchAssignment.imageIds.length === 0) {
     return c.render(
       <CenteredLayout>
-        <div class="bg-white rounded-lg shadow-lg p-8 w-full max-w-md text-center">
-          <h2 class="text-xl font-bold mb-4">Nu mai sunt imagini disponibile!</h2>
-          <p class="text-gray-600 mb-6">Nu există imagini de validat pentru acest tip de validator și dificultate.</p>
-          <form action="/auth/logout" method="post">
-            <button type="submit" class="bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700">Delogare</button>
-          </form>
-        </div>
+        <StatusMessage 
+          title="Nu mai sunt imagini disponibile!"
+          message="Nu există imagini de validat pentru acest tip de validator și dificultate."
+          form={{ label: "Delogare", action: "/auth/logout" }}
+        />
       </CenteredLayout>
     );
   }
 
+
   return c.redirect('/validate');
 });
 
-// Logout
-auth.get('/logout', requireSession, async (c) => {
+// Logout (handles both GET and POST)
+auth.all('/logout', requireSession, async (c) => {
   const session = c.get('session');
   const db = createDb(c.env.DB);
 

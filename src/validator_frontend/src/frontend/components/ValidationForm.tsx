@@ -54,7 +54,7 @@ export function ValidationForm({ image }: ValidationFormProps) {
       autoCropArea: hasInitialCrop ? 1 : 0.8,
       guides: true,
       background: true,
-      preview: previewContainerRef.current,
+      preview: previewContainerRef.current || undefined,
       data: hasInitialCrop ? {
         x: image.cropLeft!,
         y: image.cropTop!,

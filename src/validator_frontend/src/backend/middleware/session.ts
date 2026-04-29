@@ -1,13 +1,17 @@
 import type { Context, Next } from 'hono';
-import type { ValidatorSession, Env } from '../schema';
+import type { ValidatorSession, Env, ValidatorType, BatchType } from '../schema';
 import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
 
+export type AppVariables = {
+  session: ValidatorSession;
+  sessionId: string;
+};
 
-
-type AppContext = Context<{ Bindings: Env; Variables: { session: ValidatorSession; sessionId: string } }>;
+export type AppContext = Context<{ Bindings: Env; Variables: AppVariables }>;
 
 const SESSION_COOKIE = 'validator_session';
-const SESSION_TTL = 8 * 60 * 60 * 1000; // 8 hours
+export const SESSION_TTL_SECONDS = 8 * 60 * 60; // 8 hours
+export const SESSION_TTL_MS = SESSION_TTL_SECONDS * 1000;
 
 export async function requireSession(c: AppContext, next: Next) {
   const sessionId = getCookie(c, SESSION_COOKIE);
@@ -25,7 +29,7 @@ export async function requireSession(c: AppContext, next: Next) {
   }
 
   // Check if session is expired
-  if (Date.now() - sessionData.startedAt > SESSION_TTL) {
+  if (Date.now() - sessionData.startedAt > SESSION_TTL_MS) {
     await kv.delete(sessionId);
     deleteCookie(c, SESSION_COOKIE);
     return c.json({ error: 'Session expired' }, 401);
@@ -39,8 +43,8 @@ export async function requireSession(c: AppContext, next: Next) {
 
 export async function createSession(
   c: AppContext,
-  validatorType: 'first' | 'second',
-  batchType: 'easy' | 'hard'
+  validatorType: ValidatorType,
+  batchType: BatchType
 ) {
   const sessionId = crypto.randomUUID();
   const session: ValidatorSession = {
@@ -54,18 +58,32 @@ export async function createSession(
   };
 
   const kv = c.env.SESSIONS;
-  await kv.put(sessionId, JSON.stringify(session), { expirationTtl: SESSION_TTL / 1000 });
+  await kv.put(sessionId, JSON.stringify(session), { expirationTtl: SESSION_TTL_SECONDS });
 
   setCookie(c, SESSION_COOKIE, sessionId, {
     httpOnly: true,
     secure: true,
     sameSite: 'Lax',
-    maxAge: SESSION_TTL / 1000,
+    maxAge: SESSION_TTL_SECONDS,
     path: '/',
   });
 
   return session;
 }
+
+export async function updateSession(c: AppContext, updates: Partial<ValidatorSession>) {
+  const session = c.get('session');
+  const sessionId = c.get('sessionId');
+  const updatedSession = { ...session, ...updates };
+  
+  await c.env.SESSIONS.put(sessionId, JSON.stringify(updatedSession), { 
+    expirationTtl: SESSION_TTL_SECONDS 
+  });
+  
+  c.set('session', updatedSession);
+  return updatedSession;
+}
+
 
 export async function destroySession(c: AppContext) {
   const sessionId = getCookie(c, SESSION_COOKIE);
@@ -76,23 +94,4 @@ export async function destroySession(c: AppContext) {
   }
 
   deleteCookie(c, SESSION_COOKIE);
-}
-
-export async function getSession(c: AppContext): Promise<ValidatorSession | null> {
-  const sessionId = getCookie(c, SESSION_COOKIE);
-
-  if (!sessionId) return null;
-
-  const kv = c.env.SESSIONS;
-  const sessionData = await kv.get(sessionId, 'json') as ValidatorSession | null;
-
-  if (!sessionData) return null;
-
-  if (Date.now() - sessionData.startedAt > SESSION_TTL) {
-    await kv.delete(sessionId);
-    deleteCookie(c, SESSION_COOKIE);
-    return null;
-  }
-
-  return sessionData;
 }

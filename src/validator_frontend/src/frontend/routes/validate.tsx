@@ -1,143 +1,83 @@
 import { Hono } from 'hono';
-import { requireSession } from '../../backend/middleware/session';
-import type { ValidatorSession, Env } from '../../backend/schema';
-import { AuthenticatedLayout } from '../components/Layout';
-import { eq, and, inArray, sql } from 'drizzle-orm';
+import { requireSession, updateSession } from '../../backend/middleware/session';
+import type { AppVariables } from '../../backend/middleware/session';
+import type { Env } from '../../backend/schema';
+import { AuthenticatedLayout, StatusMessage } from '../components/Layout';
+import { eq } from 'drizzle-orm';
 import { createDb, schema } from '../../backend/schema';
+import { 
+  getBatchConfig, 
+  getRemainingCount, 
+  fetchBatchImagesData, 
+  claimBatch 
+} from '../../backend/batch-assignment';
 
-
-type Variables = {
-  session: ValidatorSession;
-  sessionId: string;
-};
-
-
-
-const validate = new Hono<{ Bindings: Env; Variables: Variables }>();
-
+const validate = new Hono<{ Bindings: Env; Variables: AppVariables }>();
 
 // Validation page - uses claimed batch from session
 validate.get('/', requireSession, async (c) => {
   const session = c.get('session');
   const db = createDb(c.env.DB);
-
-  const easyMaxLines = parseInt(c.env.EASY_MAX_LINES || '10', 10);
+  const config = getBatchConfig(c.env);
 
   // Get claimed image IDs from session
-  const claimedImageIds = session.claimedImageIds || [];
+  const claimedImageIds = session.claimedImageIds;
 
   if (claimedImageIds.length === 0) {
     return c.render(
       <AuthenticatedLayout session={session}>
-        <div class="bg-white rounded-lg shadow p-8 text-center max-w-2xl mx-auto">
-          <h2 class="text-2xl font-bold mb-4">Sesiunea a expirat!</h2>
-          <p class="text-gray-600 mb-6">Te rog să te autentifici din nou pentru a primi imagini.</p>
-          <form action="/auth/logout" method="post">
-            <button type="submit" class="bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700">Delogare</button>
-          </form>
-        </div>
+        <StatusMessage 
+          title="Sesiunea a expirat!"
+          message="Te rog să te autentifici din nou pentru a primi imagini."
+          type="error"
+          form={{ label: "Delogare", action: "/auth/logout" }}
+        />
       </AuthenticatedLayout>
     );
   }
 
-  // Get images from session cache if available
+  // Get images from session cache if available, else fetch from DB
   let images = session.claimedImagesData;
 
-  if (!images && claimedImageIds.length > 0) {
-    // Fallback: populate cache if missing
-    images = await db
-      .select({
-        id: schema.images.id,
-        problemId: schema.images.problemId,
-        link: schema.images.link,
-        aiDescription: schema.images.aiDescription,
-        firstValidatorApproved: schema.images.firstValidatorApproved,
-        cerinta: schema.problems.cerinta,
-        explicatie: schema.problems.explicatie,
-        isCompleted: session.validatorType === 'first'
-          ? sql`${schema.images.firstValidatorApproved} IS NOT NULL`
-          : sql`${schema.images.secondValidatorApproved} IS NOT NULL`,
-        cropTop: schema.images.cropTop,
-        cropLeft: schema.images.cropLeft,
-        cropWidth: schema.images.cropWidth,
-        cropHeight: schema.images.cropHeight,
-      })
-      .from(schema.images)
-      .innerJoin(schema.problems, eq(schema.images.problemId, schema.problems.id))
-      .where(
-        and(
-          inArray(schema.images.id, claimedImageIds),
-          session.batchType === 'easy'
-            ? sql`${schema.problems.instructionCount} <= ${easyMaxLines}`
-            : sql`${schema.problems.instructionCount} > ${easyMaxLines}`
-        )
-      )
-      .orderBy(schema.images.id);
+  if (!images) {
+    images = await fetchBatchImagesData(
+      db, 
+      claimedImageIds, 
+      session.validatorType, 
+      session.batchType, 
+      config.easyMaxLines
+    );
 
-    session.claimedImagesData = images;
-    await c.env.SESSIONS.put(c.get('sessionId'), JSON.stringify(session), { expirationTtl: 8 * 60 * 60 });
+    await updateSession(c, { claimedImagesData: images });
   }
 
-  images = images || [];
-
-  // Filter out completed images client-side (from the claimed batch)
+  // Filter out completed images client-side
   const incompleteImages = images.filter(img => !img.isCompleted);
   const completedCount = images.length - incompleteImages.length;
 
   if (incompleteImages.length === 0) {
     return c.render(
       <AuthenticatedLayout session={session}>
-        <div class="bg-white rounded-lg shadow p-8 text-center max-w-2xl mx-auto">
-          <h2 class="text-2xl font-bold mb-4">Batch complet!</h2>
-          <p class="text-gray-600 mb-6">Ai validat toate imaginile din acest batch.</p>
-          <div class="flex gap-4 justify-center">
-            <a href="/auth/logout" class="bg-gray-600 text-white px-6 py-2 rounded-lg hover:bg-gray-700">Delogare</a>
-            <a href="/validate/more" class="bg-green-600 text-white px-6 py-2 rounded-lg hover:bg-green-700">Mai multe imagini</a>
-          </div>
-        </div>
+        <StatusMessage 
+          title="Batch complet!"
+          message="Ai validat toate imaginile din acest batch."
+          secondaryLink={{ label: "Delogare", href: "/auth/logout" }}
+          link={{ label: "Mai multe imagini", href: "/validate/more" }}
+        />
       </AuthenticatedLayout>
     );
   }
 
   const currentImage = incompleteImages[0];
 
-
   // Calculate stats
   const totalInBatch = images.length;
-  const remainingInBatch = incompleteImages.length;
-  const progressPercent = totalInBatch > 0 ? ((totalInBatch - remainingInBatch) / totalInBatch) * 100 : 100;
+  const progressPercent = totalInBatch > 0 ? ((totalInBatch - incompleteImages.length) / totalInBatch) * 100 : 100;
 
   let totalRemaining = session.totalRemaining;
-
   if (totalRemaining === undefined) {
-    const getRemainingWhereClause = () => {
-      if (session.validatorType === 'first') {
-        return and(
-          sql`${schema.images.firstValidatorApproved} IS NULL`,
-          session.batchType === 'easy'
-            ? sql`${schema.problems.instructionCount} <= ${easyMaxLines}`
-            : sql`${schema.problems.instructionCount} > ${easyMaxLines}`
-        );
-      } else {
-        return and(
-          eq(schema.images.firstValidatorApproved, true),
-          sql`${schema.images.secondValidatorApproved} IS NULL`,
-          session.batchType === 'easy'
-            ? sql`${schema.problems.instructionCount} <= ${easyMaxLines}`
-            : sql`${schema.problems.instructionCount} > ${easyMaxLines}`
-        );
-      }
-    };
-
-    const totalRemainingResult = await db
-      .select({ count: sql<number>`count(*)` })
-      .from(schema.images)
-      .innerJoin(schema.problems, eq(schema.images.problemId, schema.problems.id))
-      .where(getRemainingWhereClause());
-    totalRemaining = totalRemainingResult[0]?.count || 0;
-    
-    session.totalRemaining = totalRemaining;
-    await c.env.SESSIONS.put(c.get('sessionId'), JSON.stringify(session), { expirationTtl: 8 * 60 * 60 });
+    totalRemaining = await getRemainingCount(db, session.validatorType, session.batchType, config.easyMaxLines);
+    await updateSession(c, { totalRemaining });
   }
 
   return c.render(
@@ -146,30 +86,28 @@ validate.get('/', requireSession, async (c) => {
         {/* Progress */}
         <div class="bg-white rounded-lg shadow p-4 mb-6">
           <div class="flex justify-between mb-2">
-<span class="font-medium">Progres batch ({session.batchType === 'easy' ? 'Uşor' : 'Greu'})</span>
-<span>{completedCount} / {totalInBatch} din batch | {totalRemaining} rămase în total</span>
+            <span class="font-medium">Progres batch ({session.batchType === 'easy' ? 'Uşor' : 'Greu'})</span>
+            <span>{completedCount} / {totalInBatch} din batch | {totalRemaining} rămase în total</span>
           </div>
           <div class="w-full bg-gray-200 rounded-full h-3">
             <div class="bg-blue-600 h-3 rounded-full transition-all" style={`width: ${progressPercent}%`}></div>
           </div>
         </div>
 
-        {/* Problem Statement */}
-          {/* Client-side ValidationForm mounts here */}
-          <div
-            id="validation-root"
-            data-image={JSON.stringify({
-              id: currentImage.id,
-              problemId: currentImage.problemId,
-              cerinta: currentImage.cerinta,
-              link: currentImage.link,
-              aiDescription: currentImage.aiDescription,
-              cropTop: currentImage.cropTop,
-              cropLeft: currentImage.cropLeft,
-              cropWidth: currentImage.cropWidth,
-              cropHeight: currentImage.cropHeight,
-            })}
-          />
+        <div
+          id="validation-root"
+          data-image={JSON.stringify({
+            id: currentImage.id,
+            problemId: currentImage.problemId,
+            cerinta: currentImage.cerinta,
+            link: currentImage.link,
+            aiDescription: currentImage.aiDescription,
+            cropTop: currentImage.cropTop,
+            cropLeft: currentImage.cropLeft,
+            cropWidth: currentImage.cropWidth,
+            cropHeight: currentImage.cropHeight,
+          })}
+        />
       </main>
     </AuthenticatedLayout>
   );
@@ -187,36 +125,27 @@ validate.post('/submit', requireSession, async (c) => {
   }
 
   // Verify this image belongs to this session's batch
-  const claimedImageIds = session.claimedImageIds || [];
-  if (!claimedImageIds.includes(imageId)) {
+  if (!session.claimedImageIds.includes(imageId)) {
     return c.json({ error: 'Image not in your batch' }, 403);
   }
 
-  // Update Image (Crop, CDL, Approval)
-  const updateData: any = {
-    cropTop,
-    cropLeft,
-    cropWidth,
-    cropHeight,
-    aiDescription: modifications
+  const isFirst = session.validatorType === 'first';
+  
+  const imageUpdateData: any = {
+    [isFirst ? 'firstValidatorApproved' : 'secondValidatorApproved']: approved,
+    [isFirst ? 'cropTopFirstValidator' : 'cropTopSecondValidator']: cropTop,
+    [isFirst ? 'cropLeftFirstValidator' : 'cropLeftSecondValidator']: cropLeft,
+    [isFirst ? 'cropWidthFirstValidator' : 'cropWidthSecondValidator']: cropWidth,
+    [isFirst ? 'cropHeightFirstValidator' : 'cropHeightSecondValidator']: cropHeight,
+    [isFirst ? 'aiDescriptionFirstValidator' : 'aiDescriptionSecondValidator']: modifications,
   };
 
-  if (session.validatorType === 'first') {
-    updateData.firstValidatorApproved = approved;
-  } else {
-    updateData.secondValidatorApproved = approved;
-  }
+  const problemUpdateData: any = {
+    [isFirst ? 'cerintaFirstValidator' : 'cerintaSecondValidator']: cerinta,
+  };
 
-  await db
-    .update(schema.images)
-    .set(updateData)
-    .where(eq(schema.images.id, imageId));
-
-  // Update Problem (Cerinta)
-  await db
-    .update(schema.problems)
-    .set({ cerinta })
-    .where(eq(schema.problems.id, problemId));
+  await db.update(schema.images).set(imageUpdateData).where(eq(schema.images.id, imageId));
+  await db.update(schema.problems).set(problemUpdateData).where(eq(schema.problems.id, problemId));
 
   // Update session cache
   if (session.claimedImagesData) {
@@ -231,10 +160,11 @@ validate.post('/submit', requireSession, async (c) => {
       img.cropHeight = cropHeight;
     }
   }
-  if (session.totalRemaining !== undefined) {
-    session.totalRemaining = Math.max(0, session.totalRemaining - 1);
-  }
-  await c.env.SESSIONS.put(c.get('sessionId'), JSON.stringify(session), { expirationTtl: 8 * 60 * 60 });
+  
+  await updateSession(c, {
+    claimedImagesData: session.claimedImagesData,
+    totalRemaining: session.totalRemaining !== undefined ? Math.max(0, session.totalRemaining - 1) : undefined
+  });
 
   return c.json({ success: true });
 });
@@ -244,71 +174,39 @@ validate.get('/more', requireSession, async (c) => {
   const session = c.get('session');
   const sessionId = c.get('sessionId');
   const db = createDb(c.env.DB);
+  const config = getBatchConfig(c.env);
 
-  const easyMaxLines = parseInt(c.env.EASY_MAX_LINES || '10', 10);
-  const easyBatchSize = parseInt(c.env.EASY_BATCH_SIZE || '20', 10);
-  const hardBatchSize = parseInt(c.env.HARD_BATCH_SIZE || '5', 10);
-
-  const { claimBatch } = await import('../../backend/batch-assignment');
-
-  const batchAssignment = await claimBatch(
-    db,
-    sessionId,
-    session.validatorType,
-    session.batchType,
-    { easyMaxLines, easyBatchSize, hardBatchSize }
-  );
+  const batchAssignment = await claimBatch(db, sessionId, session.validatorType, session.batchType, config);
 
   if (batchAssignment.imageIds.length === 0) {
     return c.redirect('/validate');
   }
 
   // Fetch full image data for caching
-  const imagesData = await db
-    .select({
-      id: schema.images.id,
-      problemId: schema.images.problemId,
-      link: schema.images.link,
-      aiDescription: schema.images.aiDescription,
-      firstValidatorApproved: schema.images.firstValidatorApproved,
-      cerinta: schema.problems.cerinta,
-      explicatie: schema.problems.explicatie,
-      isCompleted: session.validatorType === 'first'
-        ? sql`${schema.images.firstValidatorApproved} IS NOT NULL`
-        : sql`${schema.images.secondValidatorApproved} IS NOT NULL`,
-      cropTop: schema.images.cropTop,
-      cropLeft: schema.images.cropLeft,
-      cropWidth: schema.images.cropWidth,
-      cropHeight: schema.images.cropHeight,
-    })
-    .from(schema.images)
-    .innerJoin(schema.problems, eq(schema.images.problemId, schema.problems.id))
-    .where(inArray(schema.images.id, batchAssignment.imageIds))
-    .orderBy(schema.images.id);
+  const imagesData = await fetchBatchImagesData(
+    db, 
+    batchAssignment.imageIds, 
+    session.validatorType, 
+    session.batchType, 
+    config.easyMaxLines
+  );
 
-  // Update session with new claimed images
-  const kv = c.env.SESSIONS;
-  await kv.put(sessionId, JSON.stringify({
-    ...session,
+  // Update session
+  await updateSession(c, {
     claimedImageIds: batchAssignment.imageIds,
     claimedImagesData: imagesData,
     totalRemaining: batchAssignment.totalRemaining,
     claimedAt: Date.now(),
-  }), { expirationTtl: 8 * 60 * 60 });
+  });
 
   return c.redirect('/validate');
 });
 
 
-
-
-
 // Proxy image with CORS headers
-validate.get('/image-proxy', async (c) => {
+validate.get('/image-proxy', requireSession, async (c) => {
   const url = c.req.query('url');
-  if (!url) {
-    return c.json({ error: 'Missing url' }, 400);
-  }
+  if (!url) return c.json({ error: 'Missing url' }, 400);
   
   try {
     const response = await fetch(url);

@@ -9,6 +9,8 @@ export const problems = sqliteTable('problems', {
   instructionCount: integer('instruction_count').notNull(),
   firstValidatorSessionId: text('first_validator_session_id'),
   secondValidatorSessionId: text('second_validator_session_id'),
+  cerintaFirstValidator: text('cerinta_first_validator'),
+  cerintaSecondValidator: text('cerinta_second_validator'),
 });
 
 export const images = sqliteTable('images', {
@@ -25,8 +27,20 @@ export const images = sqliteTable('images', {
   firstValidatorApproved: integer('first_validator_approved', { mode: 'boolean' }),
   firstValidatorSessionId: text('first_validator_session_id'),
 
+  aiDescriptionFirstValidator: text('ai_description_first_validator'),
+  cropTopFirstValidator: integer('crop_top_first_validator'),
+  cropLeftFirstValidator: integer('crop_left_first_validator'),
+  cropWidthFirstValidator: integer('crop_width_first_validator'),
+  cropHeightFirstValidator: integer('crop_height_first_validator'),
+
   secondValidatorApproved: integer('second_validator_approved', { mode: 'boolean' }),
   secondValidatorSessionId: text('second_validator_session_id'),
+
+  aiDescriptionSecondValidator: text('ai_description_second_validator'),
+  cropTopSecondValidator: integer('crop_top_second_validator'),
+  cropLeftSecondValidator: integer('crop_left_second_validator'),
+  cropWidthSecondValidator: integer('crop_width_second_validator'),
+  cropHeightSecondValidator: integer('crop_height_second_validator'),
 });
 
 export type Problem = typeof problems.$inferSelect;
@@ -37,6 +51,9 @@ export const schema = { problems, images };
 export function createDb(d1: D1Database) {
   return drizzle(d1, { schema });
 }
+
+export type Db = ReturnType<typeof createDb>;
+
 
 export interface ClaimedImageData {
   id: number;
@@ -66,20 +83,7 @@ export interface ValidatorSession {
   claimedAt: number;
 }
 
-export interface ImageForValidation {
-  id: number;
-  problemId: number;
-  link: string;
-  description: string;
-  cerinta: string;
-  explicatie: string;
-}
 
-export interface ValidationResult {
-  imageId: number;
-  approved: boolean;
-  modifications: string | null;
-}
 
 export interface ValidatorStats {
   claimed: number;
