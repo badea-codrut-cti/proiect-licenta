@@ -14,6 +14,7 @@ from exam_processor.models import (
     DEFAULT_EXTRACTION_MODEL,
     DEFAULT_CDL_MODEL,
 )
+from exam_processor.figure_filter import run_figure_filter
 
 app = typer.Typer(help="Exam Processor CLI")
 
@@ -348,6 +349,45 @@ def convert_documents(
     typer.echo(f"Completed: {success_count} successful, {error_count} errors, {skipped_count} skipped")
     if error_count > 0:
         raise typer.Exit(1)
+
+
+@app.command()
+def figure_filter(
+    ctx: typer.Context,
+    input_folder: Path = typer.Argument(
+        ..., exists=True, help="Input folder containing documents (scanned recursively)"
+    ),
+    output_txt: Path = typer.Option(
+        ..., "--output-txt", "-o", help="Path to save the results txt file"
+    ),
+    extensions: str = typer.Option(
+        "pdf,docx,doc,pptx,ppt",
+        "--extensions", "-e",
+        help="Comma-separated list of file extensions to process",
+    ),
+    use_temp_images: bool = typer.Option(
+        False, "--temp-images", "-i",
+        help="Convert pages to images in a temp dir (useful for pipeline debugging)",
+    ),
+):
+    """
+    Filter documents that contain figures using layout detection.
+
+    Analyzes all documents in INPUT_FOLDER, using PP-StructureV3-like detection
+    (via PyMuPDF) to find pages with geometric figures. Images near the top of
+    the page (headers, decorative elements) are excluded. The result is a txt
+    file listing docs with figures and docs without.
+
+    This helps narrow down the dataset to only documents likely to have
+    geometric figures for further processing.
+    """
+    run_figure_filter(
+        ctx=ctx,
+        input_folder=str(input_folder),
+        output_txt=str(output_txt),
+        extensions=extensions,
+        use_temp_images=use_temp_images,
+    )
 
 
 if __name__ == "__main__":

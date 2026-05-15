@@ -8,6 +8,9 @@ dependencies = [
     "together>=0.2.0",
     "python-dotenv>=1.0.0",
     "pydantic>=2.0.0",
+    "PyMuPDF>=1.23.0",
+    "pdf2image>=1.17.0",
+    "tqdm>=4.67.0",
 ]
 
 [project.scripts]
