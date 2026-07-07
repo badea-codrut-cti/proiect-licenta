@@ -120,7 +120,6 @@ For 3D shapes not explicitly listed above (e.g., prism with non-rectangular base
 ## Output Format
 
 Return your response as a JSON object with these exact fields:
-- "image_index": the index of the image (integer)
 - "is_geometric": true if the image is a geometric figure, false otherwise (boolean)
 - "description": a SINGLE STRING containing the CDL description, with each predicate on its own line. For example: `"description": "Triangle(A, B, C)\nEquals(LengthOf(Line(A, B)), 42)"` - NOT an array!
 - "is_complete": true if fully representable, false otherwise (boolean)

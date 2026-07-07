@@ -4,17 +4,23 @@ import json
 from pathlib import Path
 
 import typer
-from exam_processor.client import TogetherClient, MathpixClient
-from exam_processor.batch import SubjectExtractionBatch, ImageDescriptionBatch, combine_results
-from exam_processor.schemas import SubjectEntry, ProblemSchema
+
+from exam_processor.client import TogetherClient
 from exam_processor.models import (
     get_model,
-    validate_model_for_images,
     format_usage_info,
-    DEFAULT_EXTRACTION_MODEL,
-    DEFAULT_CDL_MODEL,
+    DEFAULT_OCR_MODEL,
+    DEFAULT_DESCRIPTION_MODELS,
 )
 from exam_processor.figure_filter import run_figure_filter
+from exam_processor.ocr_batch import DocumentTuple, OcrExtractor
+from exam_processor.cdl_batch import DescriptionExtraction, ConsistencyAssessment, apply_outer_padding
+from exam_processor.models import DEFAULT_OUTER_PADDING
+
+try:
+    from PIL import Image as PILImage
+except ImportError:
+    PILImage = None
 
 app = typer.Typer(help="Exam Processor CLI")
 
@@ -49,316 +55,419 @@ def get_client() -> TogetherClient:
         raise typer.Exit(1)
 
 
-def get_mathpix_client() -> MathpixClient:
-    """Get a configured Mathpix client."""
-    try:
-        return MathpixClient()
-    except ValueError as e:
-        typer.secho(f"Error: {e}", fg=typer.colors.RED, err=True)
-        raise typer.Exit(1)
+def _build_documents(input_file: Path, data: list) -> list[DocumentTuple]:
+    """Parse input JSON into DocumentTuples."""
+    documents = []
+    input_dir = input_file.parent
+    for item in data:
+        if isinstance(item, list):
+            subject_pdf = item[0]
+            barem_pdf = item[1] if len(item) > 1 and item[1] else None
+        elif isinstance(item, dict):
+            subject_pdf = item.get("subject", item.get("subject_pdf", ""))
+            barem_pdf = item.get("barem", item.get("barem_pdf"))
+        else:
+            typer.secho(f"Error: Invalid entry format: {item}", fg=typer.colors.RED, err=True)
+            raise typer.Exit(1)
+
+        if not subject_pdf:
+            typer.secho("Error: subject_pdf is required", fg=typer.colors.RED, err=True)
+            raise typer.Exit(1)
+
+        def _resolve(pdf):
+            if not pdf:
+                return None
+            if Path(pdf).is_absolute():
+                return str(Path(pdf).resolve())
+            # First try as-is (relative to cwd / repo root)
+            if Path(pdf).exists():
+                return str(Path(pdf).resolve())
+            # Otherwise resolve relative to the input JSON's directory
+            return str((input_dir / pdf).resolve())
+
+        subject_path = _resolve(subject_pdf)
+        barem_path = _resolve(barem_pdf)
+
+        if not subject_path or not Path(subject_path).exists():
+            typer.secho(f"Error: Subject PDF not found: {subject_pdf}", fg=typer.colors.RED, err=True)
+            raise typer.Exit(1)
+
+        if barem_pdf and (not barem_path or not Path(barem_path).exists()):
+            typer.secho(f"[WARNING] Barem PDF not found: {barem_pdf}, skipping barem", fg=typer.colors.YELLOW)
+            barem_path = None
+
+        documents.append(DocumentTuple(subject_pdf=subject_path, barem_pdf=barem_path))
+    return documents
 
 
 @app.command()
-def create_extraction(
+def extract(
     ctx: typer.Context,
-    input_file: Path = typer.Argument(..., exists=True, help="JSON file with subject entries"),
-    output_dir: Path = typer.Option(".", help="Directory to save batch tracking files"),
-    tracking_file: Path = typer.Option(..., help="Path to save the batch tracking JSON"),
-    model: str = typer.Option(None, help="Model for extraction"),
+    input_file: Path = typer.Argument(
+        ..., exists=True,
+        help="JSON file with document tuples: [subject_pdf, barem_pdf_or_null][]",
+    ),
+    output_file: Path = typer.Option(..., help="Path to save the result JSON"),
+    image_output_dir: Path = typer.Option(
+        None, "--image-output-dir",
+        help="Directory to save extracted page images",
+    ),
+    image_base_url: str = typer.Option(
+        None, "--image-base-url",
+        help="Base URL for saved images (e.g. R2 bucket URL)",
+    ),
+    model: str = typer.Option(None, help="Model for OCR extraction (default: google/gemma-4-31B-it)"),
+    dpi: int = typer.Option(200, "--dpi", help="DPI for PDF -> image conversion"),
+    max_workers: int = typer.Option(
+        1, "--max-workers", "-j",
+        help="Thread-pool size for concurrent API requests",
+    ),
+    image_format: str = typer.Option(
+        "jpeg", "--image-format", help="Image format: jpeg, png, webp",
+    ),
+    image_quality: int = typer.Option(
+        90, "--image-quality", help="JPEG/WebP quality (1-100)",
+    ),
 ):
-    """Create a subject extraction batch from a JSON input file."""
+    """Run OCR + problem extraction on the input documents via the real-time API.
+
+    INPUT_FILE is a JSON array of document tuples:
+    [
+      ["/path/to/subject.pdf", "/path/to/barem.pdf"],
+      ["/path/to/subject2.pdf", null],
+      ["/path/to/subject3.pdf"]
+    ]
+
+    Each document's pages are converted to images and sent to the model
+    for OCR and problem extraction. Only problems WITH images are extracted.
+    """
     verbose = get_verbose(ctx)
     model_override = get_model_override(ctx)
-    
-    # Use model from command, global override, or default
-    actual_model = model or model_override or DEFAULT_EXTRACTION_MODEL
-    
+
+    actual_model = model or model_override or DEFAULT_OCR_MODEL
+
     if verbose:
         typer.echo(f"[DEBUG] Using model: {actual_model}")
-    
-    # Validate model exists
+        typer.echo(f"[DEBUG] DPI: {dpi}")
+
     model_info = get_model(actual_model)
     if verbose:
-        typer.echo(f"[DEBUG] Model info: input=${model_info.input_price_per_million}/1M, output=${model_info.output_price_per_million}/1M, context={model_info.max_context_length}")
-    
+        typer.echo(
+            f"[DEBUG] Model info: input=${model_info.input_price_per_million}/1M, "
+            f"output=${model_info.output_price_per_million}/1M, "
+            f"context={model_info.max_context_length}"
+        )
+
     client = get_client()
-    
+
     with open(input_file, "r", encoding="utf-8") as f:
         data = json.load(f)
-    
-    # Handle both {"entries": [...]} and direct array [...]
-    if isinstance(data, dict) and "entries" in data:
-        entries = [SubjectEntry(**e) for e in data["entries"]]
-    elif isinstance(data, list):
-        entries = [SubjectEntry(**e) for e in data]
-    else:
-        typer.secho("Error: Invalid input format", fg=typer.colors.RED, err=True)
+
+    documents = _build_documents(input_file, data)
+
+    if not documents:
+        typer.secho("Error: No valid document tuples found", fg=typer.colors.RED, err=True)
         raise typer.Exit(1)
-    
-    batch = SubjectExtractionBatch(client)
-    batch_id = batch.create(
-        entries=entries,
-        output_dir=str(output_dir),
-        model=actual_model
-    )
-    
-    # Rename tracking file to user-specified path
-    default_tracking = output_dir / "subject_extraction_tracking.json"
-    if default_tracking.exists():
-        tracking_file.parent.mkdir(parents=True, exist_ok=True)
-        default_tracking.replace(tracking_file)
-    
+
     if verbose:
-        typer.echo(f"[DEBUG] Created batch: {batch_id}")
-    typer.echo(batch_id)
+        typer.echo(f"[DEBUG] Processing {len(documents)} document tuple(s)")
+        for doc in documents:
+            barem_info = f" (barem: {doc.barem_pdf})" if doc.barem_pdf else ""
+            typer.echo(f"  - {doc.subject_pdf}{barem_info}")
 
-
-@app.command()
-def batch_status(batch_id: str):
-    """Check the status of any batch."""
-    client = get_client()
-    status = client.get_batch_status(batch_id)
-    
-    typer.echo(f"Batch ID: {status['batch_id']}")
-    typer.echo(f"Status: {status['status']}")
-    typer.echo(f"Created: {status['created_at']}")
-    if status["completed_at"]:
-        typer.echo(f"Completed: {status['completed_at']}")
-    if status.get("progress") is not None:
-        typer.echo(f"Progress: {status['progress']}%")
-    if status.get("error"):
-        typer.secho(f"Error: {status['error']}", fg=typer.colors.RED)
-    if status.get("error_file_id"):
-        typer.secho(f"Error file: {status['error_file_id']}", fg=typer.colors.YELLOW)
-
-
-@app.command()
-def retrieve_extraction(
-    ctx: typer.Context,
-    batch_id: str,
-    tracking_file: Path = typer.Option(..., exists=True, help="Tracking JSON from create-extraction"),
-    output_file: Path = typer.Option(..., help="Path to save the result JSON"),
-):
-    """Retrieve results from a subject extraction batch."""
-    verbose = get_verbose(ctx)
-    
-    client = get_client()
-    batch = SubjectExtractionBatch(client)
-    
-    result, (input_tokens, output_tokens), model_name = batch.retrieve(
-        batch_id=batch_id,
-        tracking_file=str(tracking_file),
+    extractor = OcrExtractor(client)
+    result, (in_tokens, out_tokens), model_name = extractor.run(
+        documents=documents,
         output_file=str(output_file),
-        verbose=verbose
+        model=actual_model,
+        dpi=dpi,
+        image_output_dir=str(image_output_dir) if image_output_dir else None,
+        base_url=image_base_url,
+        image_format=image_format,
+        image_quality=image_quality,
+        max_workers=max_workers,
+        verbose=verbose,
     )
-    
+
     total_problems = sum(len(v) for v in result.values())
-    typer.secho(f"Saved {total_problems} problems from {len(result)} files to {output_file}", fg=typer.colors.GREEN)
-    
+    typer.secho(
+        f"Saved {total_problems} problems from {len(result)} files to {output_file}",
+        fg=typer.colors.GREEN,
+    )
     model_info = get_model(model_name)
-    typer.echo(format_usage_info(input_tokens, output_tokens, model_info))
+    typer.echo(format_usage_info(in_tokens, out_tokens, model_info))
 
 
 @app.command()
-def create_image_description(
+def extract_descriptions(
     ctx: typer.Context,
-    extraction_result: Path = typer.Argument(..., exists=True, help="JSON file from retrieve-extraction"),
-    output_dir: Path = typer.Option(".", help="Directory to save batch tracking files"),
-    tracking_file: Path = typer.Option(..., help="Path to save the batch tracking JSON"),
-    model: str = typer.Option(None, help="Model for image description"),
-):
-    """Create an image description batch from extraction results."""
-    verbose = get_verbose(ctx)
-    model_override = get_model_override(ctx)
-    
-    # Use model from command, global override, or default
-    actual_model = model or model_override or DEFAULT_CDL_MODEL
-    
-    if verbose:
-        typer.echo(f"[DEBUG] Using model: {actual_model}")
-    
-    # Validate model exists AND supports images
-    model_info = validate_model_for_images(actual_model)
-    if verbose:
-        typer.echo(f"[DEBUG] Model info: input=${model_info.input_price_per_million}/1M, output=${model_info.output_price_per_million}/1M, context={model_info.max_context_length}, supports_images={model_info.supports_images}")
-    
-    client = get_client()
-    
-    with open(extraction_result, "r", encoding="utf-8") as f:
-        data = json.load(f)
-    
-    # Parse the grouped result
-    problems_by_file: dict[str, list[ProblemSchema]] = {}
-    for file_path, problems in data.items():
-        problems_by_file[file_path] = [ProblemSchema(**p) for p in problems]
-    
-    batch = ImageDescriptionBatch(client)
-    batch_id = batch.create_from_problems(
-        problems_by_file=problems_by_file,
-        output_dir=str(output_dir),
-        model=actual_model
-    )
-    
-    # Rename tracking file to user-specified path
-    default_tracking = output_dir / "image_description_tracking.json"
-    if default_tracking.exists():
-        tracking_file.parent.mkdir(parents=True, exist_ok=True)
-        default_tracking.replace(tracking_file)
-    
-    if verbose:
-        typer.echo(f"[DEBUG] Created batch: {batch_id}")
-    typer.echo(batch_id)
-
-
-@app.command()
-def retrieve_image_description(
-    ctx: typer.Context,
-    batch_id: str,
-    tracking_file: Path = typer.Option(..., exists=True, help="Tracking JSON from create-image-description"),
-    output_file: Path = typer.Option(..., help="Path to save the result JSON"),
-):
-    """Retrieve CDL results from an image description batch."""
-    verbose = get_verbose(ctx)
-    
-    client = get_client()
-    batch = ImageDescriptionBatch(client)
-    
-    result, (input_tokens, output_tokens), model_name = batch.retrieve(
-        batch_id=batch_id,
-        tracking_file=str(tracking_file),
-        output_file=str(output_file),
-        verbose=verbose
-    )
-    
-    total_cdls = sum(len(v) for v in result.values())
-    
-    # Calculate stats
-    geometric_count = 0
-    successful_count = 0
-    for cdls in result.values():
-        for cdl in cdls:
-            if cdl.get("is_geometric", False):
-                geometric_count += 1
-                if cdl.get("is_complete", False) and cdl.get("description") != "[Failed]":
-                    successful_count += 1
-    
-    typer.secho(f"Saved CDL for {total_cdls} total images to {output_file}", fg=typer.colors.GREEN)
-    typer.secho(f"  {geometric_count} geometric images")
-    typer.secho(f"  {successful_count}/{geometric_count} successful (is_complete: true, no parsing errors)", fg=typer.colors.GREEN if successful_count == geometric_count else typer.colors.YELLOW)
-    
-    model_info = get_model(model_name)
-    typer.echo(format_usage_info(input_tokens, output_tokens, model_info))
-
-
-@app.command()
-def combine(
-    extraction_result: Path = typer.Argument(..., exists=True, help="JSON file from retrieve-extraction"),
-    cdl_result: Path = typer.Argument(..., exists=True, help="JSON file from retrieve-image-description"),
-    output_file: Path = typer.Option(..., help="Path to save the final combined result"),
-):
-    """Combine extraction results with CDL descriptions into final output."""
-    # Load extraction results
-    with open(extraction_result, "r", encoding="utf-8") as f:
-        problems_by_file: dict[str, list[ProblemSchema]] = {
-            k: [ProblemSchema(**p) for p in v]
-            for k, v in json.load(f).items()
-        }
-    
-    # Load CDL results
-    with open(cdl_result, "r", encoding="utf-8") as f:
-        cdl_by_file: dict[str, list[dict]] = json.load(f)
-    
-    final = combine_results(problems_by_file, cdl_by_file, output_file=str(output_file))
-    
-    total_problems = sum(len(v) for v in final.values())
-    total_images = sum(
-        len(p.imagini) + len(p.barem_imagini) 
-        for problems in final.values() 
-        for p in problems
-    )
-    typer.secho(f"Combined {total_problems} problems with {total_images} CDL images to {output_file}", fg=typer.colors.GREEN)
-
-
-@app.command()
-def convert_documents(
-    ctx: typer.Context,
-    input_folder: Path = typer.Argument(..., exists=True, help="Input folder containing documents"),
-    output_folder: Path = typer.Argument(..., help="Output folder for markdown files"),
-    extensions: str = typer.Option(
-        "pdf,docx,doc,pptx,ppt,epub",
-        "--extensions", "-e",
-        help="Comma-separated list of file extensions to process"
+    ocr_result_file: Path = typer.Argument(
+        ..., exists=True,
+        help="OCR result JSON from extract with image paths",
     ),
-    skip_existing: bool = typer.Option(False, "--skip-existing", help="Skip files that already have markdown output"),
+    image_base_dir: Path = typer.Argument(
+        ..., exists=True,
+        help="Directory that contains the saved page images",
+    ),
+    output_file: Path = typer.Option(..., help="Path to save the enriched JSON"),
+    models: list[str] = typer.Option(
+        DEFAULT_DESCRIPTION_MODELS, "--model", "-m",
+        help="Model(s) to use for extraction. Repeat flag for multiple models.",
+    ),
+    max_workers: int = typer.Option(
+        10, "--max-workers", "-j",
+        help="Thread-pool size for concurrent API requests",
+    ),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable debug output"),
 ):
+    """Run CDL + NL description extraction over all figures using real-time API.
+
+    Each figure is sent to every specified model in parallel for both CDL
+    and natural-language tasks. Results are merged directly into the OCR
+    JSON and written to OUTPUT_FILE.
     """
-    Convert all documents in a folder (and subfolders) to markdown.
-    
-    Preserves the folder structure in the output directory.
-    Supported formats: PDF, DOCX, DOC, PPTX, PPT, EPUB
+    if verbose:
+        typer.echo(f"[DEBUG] Using models: {models}")
+
+    client = get_client()
+    extractor = DescriptionExtraction(client, max_workers=max_workers)
+
+    summary = extractor.run(
+        ocr_result_file=str(ocr_result_file),
+        image_base_dir=str(image_base_dir),
+        output_file=str(output_file),
+        models=models,
+        verbose=verbose,
+    )
+
+    typer.secho(
+        f"Saved enriched JSON → {output_file}", fg=typer.colors.GREEN
+    )
+    for m in summary["models"]:
+        mi = get_model(m)
+        typer.echo(
+            f"  {mi.name}: {mi.max_context_length} ctx | "
+            f"${mi.input_price_per_million}/1M in | ${mi.output_price_per_million}/1M out"
+        )
+
+
+@app.command()
+def assess_consistency(
+    ctx: typer.Context,
+    enriched_file: Path = typer.Argument(
+        ..., exists=True,
+        help="Enriched JSON from extract-descriptions (with CDL + NL under model_results)",
+    ),
+    image_base_dir: Path = typer.Argument(
+        ..., exists=True,
+        help="Directory that contains the saved full-page images (same one used for extract-descriptions)",
+    ),
+    output_file: Path = typer.Option(..., help="Path to save the JSON with consistency verdicts merged in"),
+    model: str = typer.Option(
+        None, "--model", "-m",
+        help="Judge model (default: Qwen/Qwen3.5-9B; pass e.g. moonshotai/Kimi-K2.6 for a stronger judge)",
+    ),
+    max_workers: int = typer.Option(
+        10, "--max-workers", "-j",
+        help="Thread-pool size for concurrent API requests",
+    ),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable debug output"),
+):
+    """Judge whether each model's CDL and NL descriptions of a figure agree.
+
+    Every (image, model) pair that already has BOTH a CDL and an NL description
+    is sent to a judge model together with the cropped figure image. The verdict
+    (consistent, severity, issues, optional corrected CDL) is merged into
+    ``model_results[model].consistency`` in the output JSON.
     """
     verbose = get_verbose(ctx)
-    ext_set = {f".{ext.strip().lower()}" for ext in extensions.split(",")}
+    client = get_client()
+    assessor = ConsistencyAssessment(client, max_workers=max_workers)
 
-    all_files = []
-    for ext in ext_set:
-        all_files.extend(input_folder.rglob(f"*{ext}"))
+    summary = assessor.run(
+        enriched_file=str(enriched_file),
+        image_base_dir=str(image_base_dir),
+        output_file=str(output_file),
+        model=model,
+        verbose=verbose,
+    )
 
-    all_files = list(set(all_files))
-    all_files.sort()
+    typer.secho(
+        f"Judged {summary['pairs']} (image,model) pairs with {summary['model']} → {output_file}",
+        fg=typer.colors.GREEN,
+    )
+    mi = get_model(summary["model"])
+    typer.echo(format_usage_info(summary["total_input_tokens"], summary["total_output_tokens"], mi))
 
-    if not all_files:
-        typer.secho("No supported files found.", fg=typer.colors.YELLOW)
-        return
 
-    typer.echo(f"Found {len(all_files)} file(s) to process.")
-    output_folder.mkdir(parents=True, exist_ok=True)
+@app.command()
+def crop_boxes(
+    ocr_result_file: Path = typer.Argument(..., exists=True, help="OCR result JSON with image paths and coordinates"),
+    image_base_dir: Path = typer.Argument(..., exists=True, help="Directory containing full-page images referenced by image_path"),
+    output_dir: Path = typer.Option(..., help="Directory to save cropped figure boxes"),
+    scale_coords: float = typer.Option(
+        1.0, "--scale",
+        help="Scale factor for coordinates (e.g. 0.01 if the model returned 0-1 decimals, 1.0 if pixel values)",
+    ),
+    padding: float = typer.Option(
+        DEFAULT_OUTER_PADDING, "--padding", "-p",
+        help="Fractional outer padding to apply to each crop (default from DEFAULT_OUTER_PADDING)",
+    ),
+):
+    """Visual debugging: crop every figure bounding box from full-page images.
 
-    client = get_mathpix_client()
-
-    success_count = 0
-    error_count = 0
-    skipped_count = 0
-
-    for file_path in all_files:
-        rel_path = file_path.relative_to(input_folder)
-        md_path = output_folder / rel_path.with_suffix(".md")
-
-        if verbose:
-            typer.echo(f"\nProcessing: {rel_path}")
-
-        if skip_existing and md_path.exists():
-            if verbose:
-                typer.secho(f"  Skipping (exists): {md_path}", fg=typer.colors.YELLOW)
-            skipped_count += 1
-            continue
-
-        md_path.parent.mkdir(parents=True, exist_ok=True)
-
-        try:
-            content = client.convert_to_markdown(str(file_path))
-            md_path.write_text(content, encoding="utf-8")
-            success_count += 1
-            if verbose:
-                typer.secho(f"  Saved: {md_path}", fg=typer.colors.GREEN)
-        except Exception as e:
-            error_count += 1
-            typer.secho(f"  Error: {e}", fg=typer.colors.RED, err=True)
-
-    typer.echo(f"\n{'='*50}")
-    typer.echo(f"Completed: {success_count} successful, {error_count} errors, {skipped_count} skipped")
-    if error_count > 0:
+    Reads the OCR JSON, resolves each image_path against IMAGE_BASE_DIR,
+    crops to the stored coordinates (with optional scaling and outer padding),
+    and writes the crop into OUTPUT_DIR.  Uses apply_outer_padding so the
+    padding amount is consistent with what CDL/NL extraction will see.
+    """
+    if PILImage is None:
+        typer.secho("Pillow is required. Install with: pip install Pillow", fg=typer.colors.RED)
         raise typer.Exit(1)
 
+    with open(ocr_result_file, "r", encoding="utf-8") as f:
+        ocr_data: dict[str, list] = json.load(f)
+
+    out_dir = Path(output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    base_dir = Path(image_base_dir)
+    ok = skip = bad_coords = 0
+
+    for source_pdf, problems in ocr_data.items():
+        doc_safe = Path(source_pdf).stem.replace(" ", "_")[:40]
+        for prob_idx, prob in enumerate(problems):
+            for img_idx, img_entry in enumerate(prob.get("imagini", [])):
+                rel = img_entry.get("image_path")
+                coords = img_entry.get("coordinates")
+                page = img_entry.get("page_number", 0)
+
+                if not rel or not coords or len(coords) != 4:
+                    bad_coords += 1
+                    continue
+
+                src = base_dir / rel if not Path(rel).is_absolute() else Path(rel)
+                if not src.exists():
+                    skip += 1
+                    continue
+
+                try:
+                    with PILImage.open(src) as page_img:
+                        w, h = page_img.size
+
+                        # Convert to pixel coordinates
+                        c = [float(v) for v in coords]
+                        if all(0.0 <= v <= 1.0 for v in c) and scale_coords == 1.0:
+                            px = [v * w if i % 2 == 0 else v * h for i, v in enumerate(c)]
+                        else:
+                            px = [v * scale_coords for v in c]
+
+                        padded = apply_outer_padding(px, padding=padding, max_w=w, max_h=h)
+                        x0, y0, x1, y1 = [int(v) for v in padded]
+                        x0, y0 = max(0, x0), max(0, y0)
+                        x1, y1 = min(w, x1), min(h, y1)
+                        if x0 >= x1 or y0 >= y1:
+                            bad_coords += 1
+                            continue
+
+                        crop = page_img.crop((x0, y0, x1, y1))
+                        fname = f"{doc_safe}_p{page:04d}_pr{prob_idx:03d}_f{img_idx:03d}.jpg"
+                        dest = out_dir / fname
+                        crop.convert("RGB").save(dest, "JPEG", quality=95)
+                        ok += 1
+                except Exception as e:
+                    typer.secho(f"  Failed to crop {src}: {e}", fg=typer.colors.RED)
+                    skip += 1
+
+            # Also crop barem images if present
+            barem = prob.get("barem")
+            if barem:
+                for img_idx, img_entry in enumerate(barem.get("imagini", [])):
+                    rel = img_entry.get("image_path")
+                    coords = img_entry.get("coordinates")
+                    page = img_entry.get("page_number", 0)
+
+                    if not rel or not coords or len(coords) != 4:
+                        bad_coords += 1
+                        continue
+
+                    src = base_dir / rel if not Path(rel).is_absolute() else Path(rel)
+                    if not src.exists():
+                        skip += 1
+                        continue
+
+                    try:
+                        with PILImage.open(src) as page_img:
+                            w, h = page_img.size
+                            c = [float(v) for v in coords]
+                            if all(0.0 <= v <= 1.0 for v in c) and scale_coords == 1.0:
+                                px = [v * w if i % 2 == 0 else v * h for i, v in enumerate(c)]
+                            else:
+                                px = [v * scale_coords for v in c]
+
+                            padded = apply_outer_padding(px, padding=padding, max_w=w, max_h=h)
+                            x0, y0, x1, y1 = [int(v) for v in padded]
+                            x0, y0 = max(0, x0), max(0, y0)
+                            x1, y1 = min(w, x1), min(h, y1)
+                            if x0 >= x1 or y0 >= y1:
+                                bad_coords += 1
+                                continue
+
+                            crop = page_img.crop((x0, y0, x1, y1))
+                            fname = f"{doc_safe}_p{page:04d}_pr{prob_idx:03d}_b{img_idx:03d}.jpg"
+                            dest = out_dir / fname
+                            crop.convert("RGB").save(dest, "JPEG", quality=95)
+                            ok += 1
+                    except Exception as e:
+                        typer.secho(f"  Failed to crop barem {src}: {e}", fg=typer.colors.RED)
+                        skip += 1
+
+    typer.secho(f"Cropped {ok} images → {output_dir}", fg=typer.colors.GREEN)
+    if skip:
+        typer.secho(f"  Skipped (missing source): {skip}", fg=typer.colors.YELLOW)
+    if bad_coords:
+        typer.secho(f"  Skipped (bad/missing coords): {bad_coords}", fg=typer.colors.YELLOW)
+
+
+@app.command()
+def export_sql(
+    ocr_result_file: Path = typer.Argument(..., exists=True, help="OCR result JSON with image URLs"),
+    output_sql: Path = typer.Argument(..., help="Path to write the .sql script"),
+    image_base_url: str = typer.Option(
+        None, "--image-base-url",
+        help="Base URL for images (optional override)",
+    ),
+):
+    """Export OCR results to D1-compatible SQLite INSERT statements.
+
+    Reads the OCR JSON and emits SQL for the validator frontend schema:
+    - problems  (cerinta, explicatie, instruction_count)
+    - images    (problem_id, link, ai_description, crop_*)
+
+    Use this to populate the D1 database after uploading images to R2.
+    """
+    from exam_processor.sql_export import generate_sql
+
+    pb, im = generate_sql(
+        str(ocr_result_file),
+        str(output_sql),
+        image_base_url=image_base_url,
+    )
+    typer.secho(
+        f"Wrote {pb} problems + {im} images → {output_sql}",
+        fg=typer.colors.GREEN,
+    )
+
+
+# ─── figure_filter ───────────────────────────────────────────────
 
 @app.command()
 def figure_filter(
     ctx: typer.Context,
     input_folder: Path = typer.Argument(
-        ..., exists=True, help="Input folder containing documents (scanned recursively)"
+        ..., exists=True, help="Input folder containing documents (scanned recursively)",
     ),
     output_txt: Path = typer.Option(
-        ..., "--output-txt", "-o", help="Path to save the results txt file"
+        ..., "--output-txt", "-o", help="Path to save the results txt file",
     ),
     extensions: str = typer.Option(
         "pdf,docx,doc,pptx,ppt",
@@ -392,3 +501,4 @@ def figure_filter(
 
 if __name__ == "__main__":
     app()
+

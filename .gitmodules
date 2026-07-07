@@ -1,0 +1,3 @@
+[submodule "src/validator_frontend"]
+	path = src/validator_frontend
+	url = git@github.com:badea-codrut-cti/GeoValidator.git

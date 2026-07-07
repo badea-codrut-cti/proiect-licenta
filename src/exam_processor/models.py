@@ -22,11 +22,11 @@ class ModelInfo:
 
 # Format: (name, input_$/1M, output_$/1M, max_context, supports_images)
 MODELS: dict[str, ModelInfo] = {
-    "Qwen/Qwen3.5-9B": ModelInfo(
+"Qwen/Qwen3.5-9B": ModelInfo(
         name="Qwen/Qwen3.5-9B",
-        input_price_per_million=0.10,
-        output_price_per_million=0.15,
-        max_context_length=256000,
+        input_price_per_million=0.17,
+        output_price_per_million=0.25,
+        max_context_length=262144,
         supports_images=True,
     ),
     "Qwen/Qwen3.5-397B-A17B": ModelInfo(
@@ -35,11 +35,42 @@ MODELS: dict[str, ModelInfo] = {
         output_price_per_million=3.6,
         max_context_length=256000,
         supports_images=True,
-    )
+    ),
+    "google/gemma-4-31B-it": ModelInfo(
+        name="google/gemma-4-31B-it",
+        input_price_per_million=0.20,
+        output_price_per_million=0.50,
+        max_context_length=256000,
+        supports_images=True,
+    ),
+    "moonshotai/Kimi-K2.6": ModelInfo(
+        name="moonshotai/Kimi-K2.6",
+        input_price_per_million=1.20,
+        output_price_per_million=4.50,
+        max_context_length=262144,
+        supports_images=True,
+    ),
 }
 
 DEFAULT_EXTRACTION_MODEL = "Qwen/Qwen3.5-9B"
-DEFAULT_CDL_MODEL = "Qwen/Qwen3.5-397B-A17B"
+DEFAULT_OCR_MODEL = "google/gemma-4-31B-it"
+KIMI_K2_MODEL = "moonshotai/Kimi-K2.6"
+
+# Models used for the multi-model CDL + NL description stage
+DEFAULT_DESCRIPTION_MODELS = [
+    "Qwen/Qwen3.5-9B",
+    "google/gemma-4-31B-it",
+    "moonshotai/Kimi-K2.6",
+]
+
+# Gemma 4 supports configurable vision token budgets: 70, 140, 280 (default), 560, 1120
+# For OCR tasks, the highest budget (1120) is recommended for fine-grained detail.
+GEMMA4_MAX_SOFT_TOKENS = 1120
+
+# How much to expand each crop region beyond the LLM's bounding box,
+# as a fraction of the box's width/height applied to each side.
+# 0.15 = add 15% padding on left, top, right, bottom.
+DEFAULT_OUTER_PADDING = 0.12
 
 
 def get_model(model_name: str) -> ModelInfo:
@@ -51,17 +82,6 @@ def get_model(model_name: str) -> ModelInfo:
             f"Available models: {available}"
         )
     return MODELS[model_name]
-
-
-def validate_model_for_images(model_name: str) -> ModelInfo:
-    """Get model info and validate it supports image inputs. Raises ValueError otherwise."""
-    model_info = get_model(model_name)
-    if not model_info.supports_images:
-        raise ValueError(
-            f"Model {model_name!r} does not support image inputs.\n"
-            f"Use a vision model like: Qwen/Qwen2.5-VL-32B-Instruct"
-        )
-    return model_info
 
 
 def format_usage_info(

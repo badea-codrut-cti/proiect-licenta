@@ -27,7 +27,9 @@ except ImportError:
 # Headers typically occupy the top ~15% of the page
 HEADER_RATIO_THRESHOLD = 0.15
 # Minimum image area to be considered a meaningful figure (not a tiny icon/decoration)
-MIN_FIGURE_AREA = 5000  # square pixels
+# Lowered aggressively for olympiad documents where geometric figures are often
+# dense / small within a crowded problem block.
+MIN_FIGURE_AREA = 1500  # square pixels
 
 
 def get_page_image_count_fitz(doc_path: str) -> tuple[int, int, list[tuple[int, list[dict]]]]:
