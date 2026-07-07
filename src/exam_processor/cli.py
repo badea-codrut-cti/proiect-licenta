@@ -6,16 +6,17 @@ from pathlib import Path
 import typer
 
 from exam_processor.client import TogetherClient
+from exam_processor.images import apply_outer_padding, is_normalized
 from exam_processor.models import (
     get_model,
     format_usage_info,
     DEFAULT_OCR_MODEL,
     DEFAULT_DESCRIPTION_MODELS,
+    DEFAULT_OUTER_PADDING,
 )
 from exam_processor.figure_filter import run_figure_filter
 from exam_processor.ocr_batch import DocumentTuple, OcrExtractor
-from exam_processor.cdl_batch import DescriptionExtraction, ConsistencyAssessment, apply_outer_padding
-from exam_processor.models import DEFAULT_OUTER_PADDING
+from exam_processor.cdl_batch import DescriptionExtraction, ConsistencyAssessment
 
 try:
     from PIL import Image as PILImage
@@ -356,7 +357,7 @@ def crop_boxes(
 
                         # Convert to pixel coordinates
                         c = [float(v) for v in coords]
-                        if all(0.0 <= v <= 1.0 for v in c) and scale_coords == 1.0:
+                        if is_normalized(c) and scale_coords == 1.0:
                             px = [v * w if i % 2 == 0 else v * h for i, v in enumerate(c)]
                         else:
                             px = [v * scale_coords for v in c]
@@ -399,7 +400,7 @@ def crop_boxes(
                         with PILImage.open(src) as page_img:
                             w, h = page_img.size
                             c = [float(v) for v in coords]
-                            if all(0.0 <= v <= 1.0 for v in c) and scale_coords == 1.0:
+                            if is_normalized(c) and scale_coords == 1.0:
                                 px = [v * w if i % 2 == 0 else v * h for i, v in enumerate(c)]
                             else:
                                 px = [v * scale_coords for v in c]

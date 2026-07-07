@@ -4,9 +4,7 @@ Reads OCR result JSON, crops each figure image, sends CDL + NL requests
 to N models in parallel via the Together AI real-time API.
 """
 
-import base64
 import json
-import os
 import tempfile
 import threading
 import concurrent.futures
@@ -17,114 +15,19 @@ from PIL import Image
 from tqdm import tqdm
 
 from exam_processor.client import TogetherClient
-from exam_processor.models import DEFAULT_DESCRIPTION_MODELS, DEFAULT_OUTER_PADDING
-from exam_processor.schemas import CdlDescription, NlDescription, ConsistencyVerdict
-
-
-def _write_atomic(path: Path, text: str) -> None:
-    """Write text to path via a temp file + atomic rename (crash-safe)."""
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(text, encoding="utf-8")
-    os.replace(tmp, path)
-
-
-def _cdl_response_format() -> dict:
-    return {
-        "type": "json_schema",
-        "json_schema": {
-            "name": "CdlDescription",
-            "schema": CdlDescription.model_json_schema(),
-        },
-    }
-
-
-def _is_normalized(coords: list[float]) -> bool:
-    return len(coords) == 4 and all(0.0 <= v <= 1.0 for v in coords)
-
-
-def apply_outer_padding(
-    coords: list[float],
-    padding: float = DEFAULT_OUTER_PADDING,
-    max_w: float = 0,
-    max_h: float = 0,
-) -> list[float]:
-    """Expand a bounding box by `padding` fraction of its own size on each side.
-
-    Args:
-        coords: [x0, y0, x1, y1].  Can be pixels or 0-1 normalized.
-        padding: fraction of box width/height to add to each side (e.g. 0.15).
-        max_w, max_h: if >0, clamp result to [0, max_w] / [0, max_h].
-    Returns:
-        New padded coords in the same units as input.
-    """
-    x0, y0, x1, y1 = coords
-    w = x1 - x0
-    h = y1 - y0
-    dx = w * padding
-    dy = h * padding
-    x0 -= dx
-    y0 -= dy
-    x1 += dx
-    y1 += dy
-    if max_w > 0:
-        x0 = max(0.0, x0)
-        x1 = min(max_w, x1)
-    if max_h > 0:
-        y0 = max(0.0, y0)
-        y1 = min(max_h, y1)
-    return [x0, y0, x1, y1]
-
-
-def _nl_response_format() -> dict:
-    return {
-        "type": "json_schema",
-        "json_schema": {
-            "name": "NlDescription",
-            "schema": NlDescription.model_json_schema(),
-        },
-    }
-
-
-def _image_to_base64(image_path: str | Path) -> str:
-    with open(image_path, "rb") as f:
-        return base64.b64encode(f.read()).decode("utf-8")
-
-
-def _build_prompt(template: str, cerinta: str, barem_explicatie: str | None) -> str:
-    prompt = template.replace("{{PROBLEM_TASK}}", cerinta)
-    if barem_explicatie:
-        prompt = prompt.replace("{{CONTEXT}}", barem_explicatie, 1)
-        prompt = prompt.replace("{{CONTEXT}}", "", 1)
-    else:
-        prompt = prompt.replace("{{CONTEXT}}", "", 2)
-    return prompt
-
-
-def _call_model(
-    client: TogetherClient,
-    model: str,
-    messages: list[dict],
-    response_format: dict,
-    max_tokens: int = 32768,
-    temperature: float = 0.2,
-) -> tuple[Optional[dict], int, int]:
-    """Send a real-time chat completion and return (parsed_dict, in_tokens, out_tokens)."""
-    try:
-        kwargs: dict[str, Any] = {
-            "model": model,
-            "messages": messages,
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-            "response_format": response_format,
-        }
-        response = client.chat_completion(**kwargs)
-        content = response.choices[0].message.content
-        obj = json.loads(content)
-        usage = response.usage
-        return obj, usage.prompt_tokens, usage.completion_tokens
-    except Exception as e:
-        print(f"[ERROR] {model} failed: {e}")
-        return None, 0, 0
+from exam_processor.images import apply_outer_padding, image_to_base64
+from exam_processor.io_utils import write_atomic
+from exam_processor.models import (
+    DEFAULT_DESCRIPTION_MODELS,
+    DEFAULT_OUTER_PADDING,
+    render_prompt,
+)
+from exam_processor.schemas import (
+    CdlDescription,
+    ConsistencyVerdict,
+    NlDescription,
+    json_schema_response_format,
+)
 
 
 def _resolve_page_image(
@@ -357,25 +260,29 @@ class DescriptionExtraction:
                 pass
 
         # Build all tasks that are NOT already in `done`.
+        # Response-format payloads and prompts are precomputed per figure (not per
+        # (figure,model) task) since they depend only on the figure, not the model.
         tasks: list[tuple] = []
+        cdl_fmt = json_schema_response_format(CdlDescription)
+        nl_fmt = json_schema_response_format(NlDescription)
         for fig in figures:
-            b64 = _image_to_base64(fig["crop_path"])
-            prompt_cdl = _build_prompt(cdl_tpl, fig["cerinta"], fig["barem_text"])
-            prompt_nl = _build_prompt(nl_tpl, fig["cerinta"], fig["barem_text"])
+            b64 = image_to_base64(fig["crop_path"])
+            prompt_cdl = render_prompt(cdl_tpl, {"PROBLEM_TASK": fig["cerinta"], "CONTEXT": [fig["barem_text"], None]})
+            prompt_nl = render_prompt(nl_tpl, {"PROBLEM_TASK": fig["cerinta"], "CONTEXT": [fig["barem_text"], None]})
             for model in models:
                 key_cdl = (fig["base_id"], model, "cdl")
                 key_nl  = (fig["base_id"], model, "nl")
                 if key_cdl not in done:
-                    tasks.append((fig, model, "cdl", prompt_cdl, b64, _cdl_response_format()))
+                    tasks.append((fig, model, "cdl", prompt_cdl, b64, cdl_fmt))
                 if key_nl not in done:
-                    tasks.append((fig, model, "nl", prompt_nl, b64, _nl_response_format()))
+                    tasks.append((fig, model, "nl", prompt_nl, b64, nl_fmt))
 
         if verbose and done:
             print(f"[DEBUG] Resuming: {len(done)} task(s) already done; {len(tasks)} remaining")
         if not tasks:
             print("[INFO] All tasks already complete — nothing to do.")
             # Still merge whatever is in ocr_data already and flush.
-            _write_atomic(out_json_path, json.dumps(ocr_data, indent=2, ensure_ascii=False))
+            write_atomic(out_json_path, json.dumps(ocr_data, indent=2, ensure_ascii=False))
             return {"figures": len(figures), "models": models, "ok": 0, "fail": 0,
                     "total_input_tokens": 0, "total_output_tokens": 0, "resumed": len(done)}
 
@@ -384,8 +291,8 @@ class DescriptionExtraction:
         def _flush() -> None:
             with _write_lock:
                 try:
-                    _write_atomic(out_json_path, json.dumps(ocr_data, indent=2, ensure_ascii=False))
-                    _write_atomic(done_path, json.dumps(sorted([list(x) for x in done]), ensure_ascii=False))
+                    write_atomic(out_json_path, json.dumps(ocr_data, indent=2, ensure_ascii=False))
+                    write_atomic(done_path, json.dumps(sorted([list(x) for x in done]), ensure_ascii=False))
                 except Exception as e:
                     print(f"[WARNING] Failed to write incremental output: {e}")
 
@@ -397,7 +304,7 @@ class DescriptionExtraction:
                     {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
                 ]}
             ]
-            result, in_tok, out_tok = _call_model(self.client, model, messages, resp_fmt)
+            result, in_tok, out_tok = self.client.call_model(model, messages, resp_fmt)
             return (fig["base_id"], model, task), (result, in_tok, out_tok)
 
         primary = models[0]
@@ -457,16 +364,6 @@ class DescriptionExtraction:
         print(f"[INFO] {ok} ok / {fail} fail — {total_in:,} in + {total_out:,} out tokens")
         return {"figures": len(figures), "models": models, "ok": ok, "fail": fail,
                 "total_input_tokens": total_in, "total_output_tokens": total_out, "resumed": len(done) - ok - fail if 'done' in dir() else 0}
-
-
-def _consistency_response_format() -> dict:
-    return {
-        "type": "json_schema",
-        "json_schema": {
-            "name": "ConsistencyVerdict",
-            "schema": ConsistencyVerdict.model_json_schema(),
-        },
-    }
 
 
 class ConsistencyAssessment:
@@ -618,34 +515,36 @@ class ConsistencyAssessment:
             print(f"[DEBUG] Resuming: {len(done)} judge task(s) done; {len(todo)} remaining")
         if not todo:
             print("[INFO] All judge tasks already complete — nothing to do.")
-            _write_atomic(out_json_path, json.dumps(ocr_data, indent=2, ensure_ascii=False))
+            write_atomic(out_json_path, json.dumps(ocr_data, indent=2, ensure_ascii=False))
             return {"pairs": len(pairs), "model": model, "ok": 0, "fail": 0,
                     "total_input_tokens": 0, "total_output_tokens": 0, "resumed": len(done)}
 
         _write_lock = threading.Lock()
+        consistency_fmt = json_schema_response_format(ConsistencyVerdict)
 
         def _flush() -> None:
             with _write_lock:
                 try:
-                    _write_atomic(out_json_path, json.dumps(ocr_data, indent=2, ensure_ascii=False))
-                    _write_atomic(done_path, json.dumps(sorted([list(x) for x in done]), ensure_ascii=False))
+                    write_atomic(out_json_path, json.dumps(ocr_data, indent=2, ensure_ascii=False))
+                    write_atomic(done_path, json.dumps(sorted([list(x) for x in done]), ensure_ascii=False))
                 except Exception as e:
                     print(f"[WARNING] Failed to write incremental output: {e}")
 
         def _execute(p: dict):
-            b64 = _image_to_base64(p["crop_path"])
-            prompt = _build_prompt(tpl, p["cerinta"], p["barem_text"])
-            prompt = prompt.replace("{{CDL_DESCRIPTION}}", p["cdl"])
-            prompt = prompt.replace("{{NL_DESCRIPTION}}", p["nl"])
+            b64 = image_to_base64(p["crop_path"])
+            prompt = render_prompt(tpl, {
+                "PROBLEM_TASK": p["cerinta"],
+                "CONTEXT": [p["barem_text"], None],
+                "CDL_DESCRIPTION": p["cdl"],
+                "NL_DESCRIPTION": p["nl"],
+            })
             messages = [
                 {"role": "user", "content": [
                     {"type": "text", "text": prompt},
                     {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
                 ]}
             ]
-            result, in_tok, out_tok = _call_model(
-                self.client, model, messages, _consistency_response_format(),
-            )
+            result, in_tok, out_tok = self.client.call_model(model, messages, consistency_fmt)
             return p, (result, in_tok, out_tok)
 
         ok = fail = total_in = total_out = 0

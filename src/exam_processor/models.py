@@ -1,5 +1,6 @@
 """Model definitions with pricing info and validation for Together.ai."""
 
+import re
 from dataclasses import dataclass
 
 @dataclass
@@ -100,4 +101,83 @@ def format_usage_info(
         f"  Cost: ${input_cost:.4f} input + ${output_cost:.4f} output "
         f"= ${total_cost:.4f} total"
     )
+
+
+def render_prompt(template: str, values: dict[str, str | None]) -> str:
+    """Substitute ``{{KEY}}`` placeholders in ``template`` with caller-supplied values.
+
+    Used by every prompt-consuming stage (OCR, CDL, NL, consistency) to fill
+    problem-specific context into a prompt template.  Each ``(key, value)`` pair
+    is applied in insertion order (Python dicts preserve it), replacing every
+    ``{{key}}`` occurrence in the template with the supplied text (``None`` is
+    treated as the empty string).
+
+    Behaviour preserved from the previous ``cdl_batch._build_prompt``:
+
+      The OCR/CDL/NL/consistency prompt templates embed ``{{CONTEXT}}`` exactly
+      **twice** -- first right after the literal text ``Additional context``
+      (no colon, no space -- the placeholder *is* the colon-free suffix), then
+      again on its own line.  The intended rendering is::
+
+          Additional context<explanation>:
+          <empty line when no barem>
+
+      That structural role only works per-occurrence: the FIRST ``{{CONTEXT}}``
+      absorbs the barem explanation (or is cleared), and the SECOND one must
+      always be cleared regardless.  Substituting the same value at BOTH
+      occurrences would duplicate the barem text on two successive lines, which
+      is wrong.  ``render_prompt`` therefore lets callers pass a **list** per
+      key instead of a single string, with one entry per placeholder
+      occurrence in the order they appear in the template.  When ``None`` (or a
+      shorter-than-placeholder-count list) is supplied, remaining occurrences
+      fall back to the empty string -- so the common case ``{'CONTEXT':
+      barem_text}`` still produces the correct single-occurrence-fill then
+      clear-the-rest behaviour that ``_build_prompt`` was special-casing.
+
+      Concretely, to reproduce the legacy semantic exactly, call::
+
+          render_prompt(tpl, {
+              'PROBLEM_TASK': cerinta,
+              'CONTEXT': [barem_text, None],   # fill 1st occurrence, clear 2nd
+          })
+
+      Simple single-occurrence placeholders like ``{{PROBLEM_TASK}}`` work
+      with a plain string value (the extra ``, / [val]`` variants below).
+
+    Args:
+        template: prompt text containing zero or more ``{{KEY}}`` markers.
+        values: mapping of ``KEY`` -> replacement.  Each value may be:
+          * a ``str`` / ``None`` -- applied to every ``{{KEY}}`` occurrence;
+          * a ``list[str | None]`` -- the i-th ``{{KEY}}`` occurrence gets the
+            i-th entry; occurrences beyond the list length get the empty string.
+          Insertion order matters because earlier-key substitutions can affect
+          the literal text of later keys (none currently do, but the
+          behaviour is deterministic).
+
+    Returns:
+        The substituted prompt string.
+    """
+    result = template
+    for key, raw in values.items():
+        if isinstance(raw, list):
+            occ = list(raw)
+        else:
+            occ = None
+        marker = f"{{{{{key}}}}}"
+        cursor = 0
+        slot = 0
+        while True:
+            idx = result.find(marker, cursor)
+            if idx == -1:
+                break
+            if occ is not None:
+                # per-occurrence list: take slot-th entry; None beyond end -> ""
+                repl = occ[slot] if slot < len(occ) else None
+            else:
+                # single value applies to every occurrence
+                repl = raw
+            result = result[:idx] + (repl if repl is not None else "") + result[idx + len(marker):]
+            cursor = idx + (len(repl) if repl is not None else 0)
+            slot += 1
+    return result
 

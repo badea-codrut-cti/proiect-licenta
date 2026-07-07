@@ -1,6 +1,5 @@
 """OCR extraction via real-time chat completions."""
 
-import base64
 import hashlib
 import json
 import os
@@ -15,13 +14,14 @@ from typing import Optional
 from tqdm import tqdm
 
 from exam_processor.client import TogetherClient
+from exam_processor.images import image_to_base64
+from exam_processor.io_utils import write_atomic
 from exam_processor.models import (
     DEFAULT_OCR_MODEL,
-
     get_model,
     format_usage_info,
 )
-from exam_processor.schemas import OcrResult
+from exam_processor.schemas import OcrResult, json_schema_response_format
 
 try:
     from pdf2image import convert_from_path
@@ -34,16 +34,6 @@ except ImportError:
     Image = None
 
 
-def format_ocr_response_format() -> dict:
-    return {
-        "type": "json_schema",
-        "json_schema": {
-            "name": "OcrResult",
-            "schema": OcrResult.model_json_schema(),
-        },
-    }
-
-
 class DocumentTuple:
     """A document tuple: (exam_subject_pdf_path, optional_barem_pdf_path)."""
 
@@ -54,11 +44,6 @@ class DocumentTuple:
     @property
     def stem(self) -> str:
         return Path(self.subject_pdf).stem
-
-
-def _image_to_base64(image_path: str | Path, fmt: str = "JPEG") -> str:
-    with open(image_path, "rb") as f:
-        return base64.b64encode(f.read()).decode("utf-8")
 
 
 def _ensure_pdf(path: str, temp_base: Path) -> str:
@@ -98,35 +83,6 @@ def _make_safe_name(name: str, max_len: int = 40) -> str:
     if len(safe) > max_len:
         safe = safe[:max_len]
     return safe or "doc"
-
-
-def _call_model(
-    client: TogetherClient,
-    model: str,
-    messages: list[dict],
-    response_format: dict,
-    max_tokens: int = 32768,
-    temperature: float = 0.2,
-    label: str = "",
-) -> tuple[Optional[dict], int, int]:
-    """Send a real-time chat completion and return (parsed_dict, in_tokens, out_tokens)."""
-    try:
-        kwargs: dict[str, Any] = {
-            "model": model,
-            "messages": messages,
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-            "response_format": response_format,
-        }
-        response = client.chat_completion(**kwargs)
-        content = response.choices[0].message.content
-        obj = json.loads(content)
-        usage = response.usage
-        return obj, usage.prompt_tokens, usage.completion_tokens
-    except Exception as e:
-        doc_info = f" ({label})" if label else ""
-        print(f"[ERROR] Model {model} failed{doc_info}: {e}")
-        return None, 0, 0
 
 
 class OcrExtractor:
@@ -172,7 +128,7 @@ class OcrExtractor:
 
         for pg_idx, img_path in enumerate(subject_page_images):
             content.append({"type": "text", "text": f"[PAGE {pg_idx + 1} - SUBJECT]"})
-            b64 = _image_to_base64(img_path, fmt="JPEG")
+            b64 = image_to_base64(img_path)
             content.append({
                 "type": "image_url",
                 "image_url": {"url": f"data:image/jpeg;base64,{b64}"},
@@ -182,7 +138,7 @@ class OcrExtractor:
             content.append({"type": "text", "text": "\n--- BEGIN BAREM DOCUMENT ---\n"})
             for pg_idx, img_path in enumerate(barem_page_images):
                 content.append({"type": "text", "text": f"[BAREM PAGE {pg_idx + 1}]"})
-                b64 = _image_to_base64(img_path, fmt="JPEG")
+                b64 = image_to_base64(img_path)
                 content.append({
                     "type": "image_url",
                     "image_url": {"url": f"data:image/jpeg;base64,{b64}"},
@@ -214,12 +170,10 @@ class OcrExtractor:
                 doc, prompt_template, dpi, temp_base
             )
 
-            result, in_tok, out_tok = _call_model(
-                self.client,
+            result, in_tok, out_tok = self.client.call_model(
                 model,
                 [{"role": "user", "content": messages}],
-                format_ocr_response_format(),
-                label=doc.stem,
+                json_schema_response_format(OcrResult),
             )
 
             if result is None:
@@ -445,10 +399,8 @@ class OcrExtractor:
             done_set.add(source_pdf)
             with _write_lock:
                 try:
-                    with open(out_path, "w", encoding="utf-8") as f:
-                        json.dump(results_by_source, f, indent=2, ensure_ascii=False)
-                    with open(done_path, "w", encoding="utf-8") as f:
-                        json.dump(sorted(done_set), f, indent=2, ensure_ascii=False)
+                    write_atomic(out_path, json.dumps(results_by_source, indent=2, ensure_ascii=False))
+                    write_atomic(done_path, json.dumps(sorted(done_set), indent=2, ensure_ascii=False))
                 except Exception as e:
                     print(f"[WARNING] Failed to write incremental output: {e}")
 

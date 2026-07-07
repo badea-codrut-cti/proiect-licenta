@@ -4,6 +4,31 @@ from typing import Optional
 from pydantic import BaseModel, Field
 
 
+def json_schema_response_format(model_cls: type[BaseModel], name: str | None = None) -> dict:
+    """Build the OpenAI-compatible structured-output ``response_format`` payload.
+
+    Every LLM call site in the project wraps a Pydantic class into the same
+    ``{"type": "json_schema", "json_schema": {"name": ..., "schema": ...}}``
+    shape so the model is constrained to emit JSON that validates against the
+    schema.  This helper replaces the four near-identical ``_*_response_format()``
+    factories previously duplicated across ``ocr_batch`` and ``cdl_batch``.
+
+    Args:
+        model_cls: a Pydantic ``BaseModel`` subclass whose ``model_json_schema()``
+            becomes the ``json_schema.schema`` payload.
+        name: optional override for ``json_schema.name``.  Defaults to the class
+            name -- matching the previous hardcoded ``CdlDescription`` /
+            ``NlDescription`` / ``OcrResult`` / ``ConsistencyVerdict`` strings.
+    """
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": name or model_cls.__name__,
+            "schema": model_cls.model_json_schema(),
+        },
+    }
+
+
 # ─── Gemma 4 OCR pipeline schemas ───────────────────────────────────────────
 
 
