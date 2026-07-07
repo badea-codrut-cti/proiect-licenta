@@ -85,37 +85,6 @@ def _nl_response_format() -> dict:
     }
 
 
-def _crop_image(
-    page_img_path: str | Path,
-    coordinates: list[float],
-    output_dir: Path,
-    suffix: str,
-    quality: int = 90,
-    outer_padding: float = DEFAULT_OUTER_PADDING,
-) -> Path:
-    """Crop a figure from a page image with optional outer padding."""
-    img = Image.open(page_img_path)
-    x0, y0, x1, y1 = coordinates
-    w, h = img.size
-    if _is_normalized(coordinates):
-        x0 *= w
-        y0 *= h
-        x1 *= w
-        y1 *= h
-    padded = apply_outer_padding([x0, y0, x1, y1], padding=outer_padding, max_w=w, max_h=h)
-    x0, y0, x1, y1 = [int(v) for v in padded]
-    x0, y0 = max(0, x0), max(0, y0)
-    x1, y1 = min(w, x1), min(h, y1)
-    if x1 <= x0:
-        x1 = min(x0 + 1, w)
-    if y1 <= y0:
-        y1 = min(y0 + 1, h)
-    cropped = img.crop((x0, y0, x1, y1))
-    out = output_dir / f"{Path(page_img_path).stem}_{suffix}.jpg"
-    cropped.convert("RGB").save(out, format="JPEG", quality=quality)
-    return out
-
-
 def _image_to_base64(image_path: str | Path) -> str:
     with open(image_path, "rb") as f:
         return base64.b64encode(f.read()).decode("utf-8")
@@ -129,13 +98,6 @@ def _build_prompt(template: str, cerinta: str, barem_explicatie: str | None) -> 
     else:
         prompt = prompt.replace("{{CONTEXT}}", "", 2)
     return prompt
-
-
-def _extra_model_kwargs(model: str) -> dict[str, Any]:
-    extra: dict[str, Any] = {}
-    if "kimi" in model.lower():
-        extra["reasoning"] = {"enabled": False}
-    return extra
 
 
 def _call_model(
@@ -155,7 +117,6 @@ def _call_model(
             "max_tokens": max_tokens,
             "response_format": response_format,
         }
-        kwargs.update(_extra_model_kwargs(model))
         response = client.chat_completion(**kwargs)
         content = response.choices[0].message.content
         obj = json.loads(content)

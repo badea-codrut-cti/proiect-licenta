@@ -4,25 +4,6 @@ from typing import Optional
 from pydantic import BaseModel, Field
 
 
-class SubjectEntry(BaseModel):
-    """Input entry for subject extraction batch creation."""
-    subject: str = Field(description="Path to subject file")
-    barem: Optional[str] = Field(default=None, description="Path to barem file (optional)")
-
-
-class BaremSchema(BaseModel):
-    """Schema for barem (grading details)."""
-    explicatie: str = Field(description="Grading explanation")
-    imagini: list[str] = Field(default_factory=list, description="Images in barem")
-
-
-class ProblemSchema(BaseModel):
-    """Single problem from extraction - matches out.json structure."""
-    cerinta: str = Field(description="Problem statement")
-    barem: Optional[BaremSchema] = Field(default=None, description="Barem (grading details)")
-    imagini: list[str] = Field(default_factory=list, description="Images in subject")
-
-
 # ─── Gemma 4 OCR pipeline schemas ───────────────────────────────────────────
 
 
