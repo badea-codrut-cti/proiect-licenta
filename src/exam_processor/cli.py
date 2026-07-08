@@ -1,15 +1,16 @@
-"""CLI commands for exam processor."""
-
 import json
 from pathlib import Path
 
 import typer
+from PIL import Image as PILImage
 
-from exam_processor.client import TogetherClient
-from exam_processor.images import apply_outer_padding, is_normalized
-from exam_processor.models import (
+from exam_processor.utils.client import TogetherClient
+from exam_processor.utils.images import crop_image
+from exam_processor.utils.models import (
     get_model,
     format_usage_info,
+    DEFAULT_CONSISTENCY_JUDGE_MODEL,
+    DEFAULT_IMAGE_QUALITY,
     DEFAULT_OCR_MODEL,
     DEFAULT_DESCRIPTION_MODELS,
     DEFAULT_OUTER_PADDING,
@@ -17,11 +18,6 @@ from exam_processor.models import (
 from exam_processor.figure_filter import run_figure_filter
 from exam_processor.ocr_batch import DocumentTuple, OcrExtractor
 from exam_processor.cdl_batch import DescriptionExtraction, ConsistencyAssessment
-
-try:
-    from PIL import Image as PILImage
-except ImportError:
-    PILImage = None
 
 app = typer.Typer(help="Exam Processor CLI")
 
@@ -32,23 +28,19 @@ def global_options(
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Enable debug output"),
     model: str = typer.Option(None, "--model", "-m", help="Override model for all commands"),
 ):
-    """Global options available for all commands."""
     ctx.meta["verbose"] = verbose
     ctx.meta["model"] = model
 
 
 def get_verbose(ctx: typer.Context) -> bool:
-    """Get verbose flag from context."""
     return ctx.meta.get("verbose", False)
 
 
 def get_model_override(ctx: typer.Context) -> str | None:
-    """Get model override from context."""
     return ctx.meta.get("model")
 
 
 def get_client() -> TogetherClient:
-    """Get a configured Together client."""
     try:
         return TogetherClient()
     except ValueError as e:
@@ -57,7 +49,6 @@ def get_client() -> TogetherClient:
 
 
 def _build_documents(input_file: Path, data: list) -> list[DocumentTuple]:
-    """Parse input JSON into DocumentTuples."""
     documents = []
     input_dir = input_file.parent
     for item in data:
@@ -80,10 +71,8 @@ def _build_documents(input_file: Path, data: list) -> list[DocumentTuple]:
                 return None
             if Path(pdf).is_absolute():
                 return str(Path(pdf).resolve())
-            # First try as-is (relative to cwd / repo root)
             if Path(pdf).exists():
                 return str(Path(pdf).resolve())
-            # Otherwise resolve relative to the input JSON's directory
             return str((input_dir / pdf).resolve())
 
         subject_path = _resolve(subject_pdf)
@@ -127,7 +116,7 @@ def extract(
         "jpeg", "--image-format", help="Image format: jpeg, png, webp",
     ),
     image_quality: int = typer.Option(
-        90, "--image-quality", help="JPEG/WebP quality (1-100)",
+        DEFAULT_IMAGE_QUALITY, "--image-quality", help="JPEG/WebP quality (1-100)",
     ),
 ):
     """Run OCR + problem extraction on the input documents via the real-time API.
@@ -177,7 +166,7 @@ def extract(
             typer.echo(f"  - {doc.subject_pdf}{barem_info}")
 
     extractor = OcrExtractor(client)
-    result, (in_tokens, out_tokens), model_name = extractor.run(
+    summary = extractor.run(
         documents=documents,
         output_file=str(output_file),
         model=actual_model,
@@ -190,6 +179,9 @@ def extract(
         verbose=verbose,
     )
 
+    result = summary["results"]
+    in_tokens, out_tokens = summary["total_tokens"]
+    model_name = summary["model"]
     total_problems = sum(len(v) for v in result.values())
     typer.secho(
         f"Saved {total_problems} problems from {len(result)} files to {output_file}",
@@ -266,7 +258,7 @@ def assess_consistency(
     output_file: Path = typer.Option(..., help="Path to save the JSON with consistency verdicts merged in"),
     model: str = typer.Option(
         None, "--model", "-m",
-        help="Judge model (default: Qwen/Qwen3.5-9B; pass e.g. moonshotai/Kimi-K2.6 for a stronger judge)",
+        help=f"Judge model (default: {DEFAULT_CONSISTENCY_JUDGE_MODEL}; pass e.g. moonshotai/Kimi-K2.6 for a stronger judge)",
     ),
     max_workers: int = typer.Option(
         10, "--max-workers", "-j",
@@ -302,7 +294,7 @@ def assess_consistency(
 
 
 @app.command()
-def crop_boxes(
+def export_crops(
     ocr_result_file: Path = typer.Argument(..., exists=True, help="OCR result JSON with image paths and coordinates"),
     image_base_dir: Path = typer.Argument(..., exists=True, help="Directory containing full-page images referenced by image_path"),
     output_dir: Path = typer.Option(..., help="Directory to save cropped figure boxes"),
@@ -315,13 +307,6 @@ def crop_boxes(
         help="Fractional outer padding to apply to each crop (default from DEFAULT_OUTER_PADDING)",
     ),
 ):
-    """Visual debugging: crop every figure bounding box from full-page images.
-
-    Reads the OCR JSON, resolves each image_path against IMAGE_BASE_DIR,
-    crops to the stored coordinates (with optional scaling and outer padding),
-    and writes the crop into OUTPUT_DIR.  Uses apply_outer_padding so the
-    padding amount is consistent with what CDL/NL extraction will see.
-    """
     if PILImage is None:
         typer.secho("Pillow is required. Install with: pip install Pillow", fg=typer.colors.RED)
         raise typer.Exit(1)
@@ -333,6 +318,28 @@ def crop_boxes(
     out_dir.mkdir(parents=True, exist_ok=True)
     base_dir = Path(image_base_dir)
     ok = skip = bad_coords = 0
+
+    def _crop_one(src: Path, coords: list, dest: Path, label: str) -> None:
+        nonlocal ok, bad_coords, skip
+        try:
+            im = PILImage.open(src)
+        except Exception as e:
+            typer.secho(f"  Failed to open {label} {src}: {e}", fg=typer.colors.RED)
+            skip += 1
+            return
+        try:
+            crop = crop_image(im, coords, outer_padding=padding, scale=scale_coords)
+            if crop is None:
+                bad_coords += 1
+                return
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            crop.save(dest, format="JPEG", quality=DEFAULT_IMAGE_QUALITY)
+            ok += 1
+        except Exception as e:
+            typer.secho(f"  Failed to crop {label} {src}: {e}", fg=typer.colors.RED)
+            skip += 1
+        finally:
+            im.close()
 
     for source_pdf, problems in ocr_data.items():
         doc_safe = Path(source_pdf).stem.replace(" ", "_")[:40]
@@ -351,35 +358,9 @@ def crop_boxes(
                     skip += 1
                     continue
 
-                try:
-                    with PILImage.open(src) as page_img:
-                        w, h = page_img.size
+                fname = f"{doc_safe}_p{page:04d}_pr{prob_idx:03d}_f{img_idx:03d}.jpg"
+                _crop_one(src, coords, out_dir / fname, "subject")
 
-                        # Convert to pixel coordinates
-                        c = [float(v) for v in coords]
-                        if is_normalized(c) and scale_coords == 1.0:
-                            px = [v * w if i % 2 == 0 else v * h for i, v in enumerate(c)]
-                        else:
-                            px = [v * scale_coords for v in c]
-
-                        padded = apply_outer_padding(px, padding=padding, max_w=w, max_h=h)
-                        x0, y0, x1, y1 = [int(v) for v in padded]
-                        x0, y0 = max(0, x0), max(0, y0)
-                        x1, y1 = min(w, x1), min(h, y1)
-                        if x0 >= x1 or y0 >= y1:
-                            bad_coords += 1
-                            continue
-
-                        crop = page_img.crop((x0, y0, x1, y1))
-                        fname = f"{doc_safe}_p{page:04d}_pr{prob_idx:03d}_f{img_idx:03d}.jpg"
-                        dest = out_dir / fname
-                        crop.convert("RGB").save(dest, "JPEG", quality=95)
-                        ok += 1
-                except Exception as e:
-                    typer.secho(f"  Failed to crop {src}: {e}", fg=typer.colors.RED)
-                    skip += 1
-
-            # Also crop barem images if present
             barem = prob.get("barem")
             if barem:
                 for img_idx, img_entry in enumerate(barem.get("imagini", [])):
@@ -396,31 +377,8 @@ def crop_boxes(
                         skip += 1
                         continue
 
-                    try:
-                        with PILImage.open(src) as page_img:
-                            w, h = page_img.size
-                            c = [float(v) for v in coords]
-                            if is_normalized(c) and scale_coords == 1.0:
-                                px = [v * w if i % 2 == 0 else v * h for i, v in enumerate(c)]
-                            else:
-                                px = [v * scale_coords for v in c]
-
-                            padded = apply_outer_padding(px, padding=padding, max_w=w, max_h=h)
-                            x0, y0, x1, y1 = [int(v) for v in padded]
-                            x0, y0 = max(0, x0), max(0, y0)
-                            x1, y1 = min(w, x1), min(h, y1)
-                            if x0 >= x1 or y0 >= y1:
-                                bad_coords += 1
-                                continue
-
-                            crop = page_img.crop((x0, y0, x1, y1))
-                            fname = f"{doc_safe}_p{page:04d}_pr{prob_idx:03d}_b{img_idx:03d}.jpg"
-                            dest = out_dir / fname
-                            crop.convert("RGB").save(dest, "JPEG", quality=95)
-                            ok += 1
-                    except Exception as e:
-                        typer.secho(f"  Failed to crop barem {src}: {e}", fg=typer.colors.RED)
-                        skip += 1
+                    fname = f"{doc_safe}_p{page:04d}_pr{prob_idx:03d}_b{img_idx:03d}.jpg"
+                    _crop_one(src, coords, out_dir / fname, "barem")
 
     typer.secho(f"Cropped {ok} images → {output_dir}", fg=typer.colors.GREEN)
     if skip:
@@ -459,7 +417,6 @@ def export_sql(
     )
 
 
-# ─── figure_filter ───────────────────────────────────────────────
 
 @app.command()
 def figure_filter(
