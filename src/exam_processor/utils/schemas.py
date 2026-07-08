@@ -18,6 +18,7 @@ class ImageEntry(BaseModel):
         default_factory=list,
         description="Bounding box [x0, y0, x1, y1] as 0-1 page-relative decimals",
     )
+    description: str = Field(default="", description="Short OCR description of the cropped figure")
 
 
 class OcrBaremSchema(BaseModel):
