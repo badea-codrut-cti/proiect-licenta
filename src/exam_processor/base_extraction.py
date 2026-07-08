@@ -1,14 +1,21 @@
 import json
+import os
 import threading
 import concurrent.futures
 from pathlib import Path
-from typing import Any, Hashable, Iterable, Optional
+from typing import Any, Hashable, Optional
 
 from tqdm import tqdm
 
 from exam_processor.utils.client import CompletionResult, TogetherClient
-from exam_processor.utils.io_utils import write_atomic
 from exam_processor.utils.prompt import Prompt
+
+
+def _write_atomic(path: str | Path, text: str) -> None:
+    p = Path(path)
+    tmp = p.with_suffix(p.suffix + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, p)
 
 
 class BaseExtraction:
@@ -147,9 +154,9 @@ class BaseExtraction:
 
     def _flush_state(self, out_json_path: Path, done: set) -> None:
         try:
-            write_atomic(out_json_path, json.dumps(self._dump_state(), indent=2, ensure_ascii=False))
+            _write_atomic(out_json_path, json.dumps(self._dump_state(), indent=2, ensure_ascii=False))
             done_payload = sorted(self._serialize_done_key(k) for k in done)
-            write_atomic(out_json_path.with_suffix(out_json_path.suffix + ".done"),
+            _write_atomic(out_json_path.with_suffix(out_json_path.suffix + ".done"),
                          json.dumps(done_payload, ensure_ascii=False))
         except Exception as e:
             print(f"[WARNING] Failed to write incremental output: {e}")

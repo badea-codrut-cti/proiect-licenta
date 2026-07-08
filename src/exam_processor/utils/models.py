@@ -110,28 +110,3 @@ def format_usage_info(input_tokens: int, output_tokens: int, model: ModelInfo) -
         f"  Cost: ${input_cost:.4f} input + ${output_cost:.4f} output "
         f"= ${total_cost:.4f} total"
     )
-
-
-def render_prompt(template: str, values: dict[str, object]) -> str:
-    result = template
-    for key, raw in values.items():
-        occ = list(raw) if isinstance(raw, list) else None
-        marker = f"{{{{{key}}}}}"
-        cursor = 0
-        slot = 0
-        while True:
-            idx = result.find(marker, cursor)
-            if idx == -1:
-                break
-            if occ is not None:
-                repl = occ[slot] if slot < len(occ) else None
-            else:
-                repl = raw
-            result = (
-                result[:idx]
-                + (repl if repl is not None else "")
-                + result[idx + len(marker):]
-            )
-            cursor = idx + (len(repl) if repl is not None else 0)
-            slot += 1
-    return result
