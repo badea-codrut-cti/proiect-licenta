@@ -10,7 +10,7 @@ from pathlib import Path
 
 from PIL import Image as PILImage
 
-from exam_processor.base_extraction import BaseExtraction
+from exam_processor.batch_emulator import BatchEmulator
 from exam_processor.utils.client import CompletionResult, TogetherClient
 from exam_processor.utils.images import render_pdf_page
 from exam_processor.utils.models import DEFAULT_IMAGE_QUALITY, DEFAULT_OCR_MODEL, get_model
@@ -112,17 +112,19 @@ def _build_query(
     return query, page_imgs, page_paths, doc_dir
 
 
-class OcrExtractor(BaseExtraction):
+class OcrExtractor(BatchEmulator):
+    EMPTY_ITEMS_LABEL = "No documents to process."
+    PROGRESS_LABEL = "OCR extracting"
+
     def __init__(
         self,
         client: TogetherClient,
-        prompt: Prompt | None = None,
         *,
         prompts_dir: str = "prompts",
         max_workers: int = 1,
     ):
-        super().__init__(client, prompt or Prompt("gemma4_ocr_exam", prompts_dir), max_workers=max_workers)
-        self._ocr_prompt: Prompt = self.prompt
+        super().__init__(client, max_workers=max_workers)
+        self._ocr_prompt = Prompt("gemma4_ocr_exam", prompts_dir)
         self._model: str = DEFAULT_OCR_MODEL
         self._verbose: bool = False
         self._dpi: int = 200
@@ -133,36 +135,27 @@ class OcrExtractor(BaseExtraction):
         self._flat_r2_keys: bool = True
         self._results: dict[str, list[dict]] = {}
 
-    def _build_tasks(self, items: list, done: set) -> list:
+    def build_tasks(self, items: list[DocumentTuple], done: set) -> list[DocumentTuple]:
         return [d for d in items if d.subject_pdf not in done]
 
-    def _done_key(self, task: DocumentTuple) -> str:
+    def task_id(self, task: DocumentTuple) -> str:
         return task.subject_pdf
 
-    def _empty_items_error(self) -> str:
-        return "No documents to process."
-
-    def _plan_line(self, items: list) -> str:
+    def plan_line(self, items: list) -> str:
         return f"[DEBUG] {len(items)} document(s) queued"
 
-    def _progress_desc(self) -> str:
-        return "OCR extracting"
-
-    def _summary_fields(self, items: list) -> dict[str, Any]:
+    def summary_extras(self, items: list) -> dict[str, Any]:
         return {"documents": len(items), "model": self._model}
 
-    def _rehydrate_from_prev(self, prev: dict, done: set) -> None:
+    def rehydrate_from_prev(self, prev: dict, done: set) -> None:
         for source_pdf in prev.keys():
             self._results[source_pdf] = prev[source_pdf]
             done.add(source_pdf)
 
-    def _dump_state(self) -> Any:
+    def dump_state(self) -> Any:
         return self._results
 
-    def _serialize_done_key(self, key: Any) -> Any:
-        return str(key)
-
-    def _execute(self, task: DocumentTuple) -> CompletionResult:
+    def execute(self, task: DocumentTuple) -> CompletionResult:
         if self._verbose:
             print(f"[DEBUG] Processing {task.subject_pdf}")
         with tempfile.TemporaryDirectory(prefix="ocr_") as tdir:
@@ -178,13 +171,8 @@ class OcrExtractor(BaseExtraction):
             self._results[task.subject_pdf] = validated
             return result
 
-    def _merge(self, task: DocumentTuple, result: CompletionResult) -> tuple[int, int]:
-        if not result.ok:
-            return 0, 1
-        stored = self._results.get(task.subject_pdf)
-        if stored is None:
-            return 0, 1
-        return 1, 0
+    def merge_result(self, task: DocumentTuple, result: CompletionResult) -> None:
+        return
 
     @staticmethod
     def _extract_problems(content: OcrResult | dict | None) -> list[dict]:
@@ -340,20 +328,7 @@ class OcrExtractor(BaseExtraction):
         self._flat_r2_keys = flat_r2_keys
         self.max_workers = max_workers
 
-        Path(output_file).parent.mkdir(parents=True, exist_ok=True)
-        items = list(documents)
-        resume_prev = None
-        out_path = Path(output_file)
-        if out_path.exists():
-            try:
-                with open(out_path, "r", encoding="utf-8") as f:
-                    resume_prev = json.load(f)
-                print(f"[INFO] Resumed from existing output: {len(resume_prev)} files already done")
-            except Exception as e:
-                print(f"[WARNING] Could not read existing output ({e}), starting fresh")
-                resume_prev = {}
-
-        summary = self._run_pipeline(items, output_file, resume_prev=resume_prev, verbose=verbose)
+        summary = self.run_pipeline(list(documents), output_file, verbose=verbose)
         summary["results"] = self._results
         summary["total_tokens"] = (summary["total_input_tokens"], summary["total_output_tokens"])
         return summary

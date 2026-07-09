@@ -1,10 +1,12 @@
+from __future__ import annotations
 import json
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Iterator, Optional
 
 from PIL import Image as PILImage
 
-from exam_processor.base_extraction import BaseExtraction
+from exam_processor.batch_emulator import BatchEmulator
 from exam_processor.utils.client import CompletionResult, TogetherClient
 from exam_processor.utils.images import crop_image, render_pdf_page
 from exam_processor.utils.models import (
@@ -17,6 +19,36 @@ from exam_processor.utils.schemas import (
     ConsistencyVerdict,
     NlDescription,
 )
+
+
+@dataclass
+class FigureEntry:
+    doc_idx: int
+    source_pdf: str
+    prob_idx: int
+    cerinta: str
+    barem_text: Optional[str]
+    image_kind: str
+    img_idx: int
+    entry: dict
+
+    @property
+    def base_id(self) -> str:
+        return f"d{self.doc_idx:04d}-p{self.prob_idx:04d}-{self.image_kind[0]}{self.img_idx:04d}"
+
+
+def walk_figure_entries(ocr_data: dict[str, list]) -> Iterator[FigureEntry]:
+    for doc_idx, (source_pdf, problems) in enumerate(ocr_data.items()):
+        for prob_idx, prob in enumerate(problems):
+            cerinta = prob.get("cerinta", "")
+            barem = prob.get("barem")
+            barem_text = barem.get("explicatie", "") if barem else None
+            for i, e in enumerate(prob.get("imagini", [])):
+                yield FigureEntry(doc_idx, source_pdf, prob_idx, cerinta, barem_text, "imagini", i, e)
+            if barem:
+                for i, e in enumerate(barem.get("imagini", [])):
+                    yield FigureEntry(doc_idx, source_pdf, prob_idx, cerinta, barem_text, "barem", i, e)
+
 
 
 def _resolve_page_image(source_pdf: str, page_number: int, fig: dict, image_base: Path) -> Path | None:
@@ -57,78 +89,84 @@ def _crop_figure_to_image(source_pdf: str, entry: dict, image_base: Path, dpi: i
             opened_doc.close()
 
 
-class DescriptionExtraction(BaseExtraction):
+@dataclass
+class FigureTask:
+    fig: dict
+    model: str
+    task_kind: str
+    prompt: str
+    img: PILImage.Image
+    schema: type
+
+
+class DescriptionExtraction(BatchEmulator):
+    EMPTY_ITEMS_LABEL = "No figure images found."
+    PROGRESS_LABEL = "Extracting"
+
     def __init__(
         self,
         client: TogetherClient,
-        prompt: Prompt | list[Prompt] | None = None,
         *,
         prompts_dir: str = "prompts",
         max_workers: int = 10,
     ):
-        prompts = prompt or [Prompt("image_to_cdl", prompts_dir), Prompt("image_to_nl", prompts_dir)]
-        super().__init__(client, prompts, max_workers=max_workers)
-        self._cdl_prompt, self._nl_prompt = self.prompt
+        super().__init__(client, max_workers=max_workers)
+        self._cdl_prompt = Prompt("image_to_cdl", prompts_dir)
+        self._nl_prompt = Prompt("image_to_nl", prompts_dir)
         self.models: list[str] = []
         self._ocr_data: dict[str, list] = {}
-        self._out_json_path: Optional[Path] = None
 
     def _iter_work_items(self, ocr_data: dict[str, list], image_base: Path, verbose: bool) -> list[dict]:
         figures: list[dict] = []
-        for doc_idx, source_pdf, prob_idx, cerinta, barem_text, kind, img_idx, entry in self._iter_figure_entries(ocr_data):
-            base_id = f"d{doc_idx:04d}-p{prob_idx:04d}-{kind[0]}{img_idx:04d}"
-            fig_img = _crop_figure_to_image(source_pdf, entry, image_base)
+        for fe in walk_figure_entries(ocr_data):
+            fig_img = _crop_figure_to_image(fe.source_pdf, fe.entry, image_base)
             if fig_img is None:
                 if verbose:
-                    print(f"[WARNING] Failed to render/crop {source_pdf} page {entry.get('page_number')}")
+                    print(f"[WARNING] Failed to render/crop {fe.source_pdf} page {fe.entry.get('page_number')}")
                 continue
             figures.append({
-                "source_pdf": source_pdf, "doc_idx": doc_idx, "prob_idx": prob_idx,
-                "image_kind": kind, "img_idx": img_idx, "base_id": base_id,
-                "img": fig_img, "cerinta": cerinta, "barem_text": barem_text,
+                "source_pdf": fe.source_pdf, "doc_idx": fe.doc_idx, "prob_idx": fe.prob_idx,
+                "image_kind": fe.image_kind, "img_idx": fe.img_idx, "base_id": fe.base_id,
+                "img": fig_img, "cerinta": fe.cerinta, "barem_text": fe.barem_text,
             })
         return figures
 
-    def _empty_items_error(self) -> str:
-        return "No figure images found."
-
-    def _plan_line(self, items: list) -> str:
+    def plan_line(self, items: list) -> str:
         return f"[DEBUG] {len(items)} figures x {len(self.models)} models x 2 tasks = {len(items)*len(self.models)*2} requests"
 
-    def _build_tasks(self, items: list, done: set) -> list:
-        tasks: list[dict] = []
+    def build_tasks(self, items: list, done: set) -> list[FigureTask]:
+        tasks: list[FigureTask] = []
         for fig in items:
             prompt_cdl = self._cdl_prompt.render({"PROBLEM_TASK": fig["cerinta"], "CONTEXT": [fig["barem_text"], None]})
             prompt_nl = self._nl_prompt.render({"PROBLEM_TASK": fig["cerinta"], "CONTEXT": [fig["barem_text"], None]})
             for model in self.models:
-                for task, prompt, schema in (("cdl", prompt_cdl, CdlDescription), ("nl", prompt_nl, NlDescription)):
-                    if (fig["base_id"], model, task) not in done:
-                        tasks.append({"fig": fig, "model": model, "task": task, "prompt": prompt, "img": fig["img"], "schema": schema})
+                for task_kind, prompt, schema in (("cdl", prompt_cdl, CdlDescription), ("nl", prompt_nl, NlDescription)):
+                    if (fig["base_id"], model, task_kind) not in done:
+                        tasks.append(FigureTask(fig, model, task_kind, prompt, fig["img"], schema))
         return tasks
 
-    def _done_key(self, task: dict) -> tuple:
-        return (task["fig"]["base_id"], task["model"], task["task"])
+    def task_id(self, task: FigureTask) -> tuple:
+        return (task.fig["base_id"], task.model, task.task_kind)
 
-    def _execute(self, task: dict) -> CompletionResult:
+    def execute(self, task: FigureTask) -> CompletionResult:
         return self.client.complete(
-            task["model"],
-            query=[task["prompt"], task["img"]],
-            response_schema=task["schema"],
+            task.model,
+            query=[task.prompt, task.img],
+            response_schema=task.schema,
         )
 
-    def _merge(self, task: dict, result: CompletionResult) -> tuple[int, int]:
-        fig = task["fig"]
-        request_model = task["model"]
-        task_kind = task["task"]
+    def merge_result(self, task: FigureTask, result: CompletionResult) -> None:
+        fig = task.fig
+        request_model = task.model
+        task_kind = task.task_kind
         primary = self.models[0]
         probs = self._ocr_data[fig["source_pdf"]]
         imgs = (probs[fig["prob_idx"]].get("barem") or {}).get("imagini", []) if fig["image_kind"] == "barem" else probs[fig["prob_idx"]].get("imagini", [])
         img = imgs[fig["img_idx"]]
         mrs = img.setdefault("model_results", {})
         mr = mrs.setdefault(request_model, {})
-
         if not result.ok or result.content is None:
-            return 0, 1
+            return
         content = result.content
         if task_kind == "cdl":
             mr["cdl"] = {
@@ -149,15 +187,11 @@ class DescriptionExtraction(BaseExtraction):
             else:
                 img["nl_is_geometric"] = content.is_geometric
                 img["natural_language"] = content.natural_language
-        return 1, 0
 
-    def _progress_desc(self) -> str:
-        return "Extracting"
-
-    def _summary_fields(self, items: list) -> dict[str, Any]:
+    def summary_extras(self, items: list) -> dict[str, Any]:
         return {"figures": len(items), "models": self.models}
 
-    def _rehydrate_from_prev(self, prev: dict, done: set) -> None:
+    def rehydrate_from_prev(self, prev: dict, done: set) -> None:
         ocr_data = self._ocr_data
         doc_index_of = {pdf: i for i, pdf in enumerate(ocr_data.keys())}
         for src_key, probs in prev.items():
@@ -191,11 +225,8 @@ class DescriptionExtraction(BaseExtraction):
         if p_pro.get("barem") and p_cur.get("barem"):
             _scan("barem", p_pro["barem"].get("imagini", []), p_cur["barem"].get("imagini", []))
 
-    def _dump_state(self) -> Any:
+    def dump_state(self) -> Any:
         return self._ocr_data
-
-    def _serialize_done_key(self, key: Any) -> Any:
-        return list(key)
 
     def run(
         self,
@@ -209,115 +240,114 @@ class DescriptionExtraction(BaseExtraction):
         self.models = models or DEFAULT_DESCRIPTION_MODELS
         with open(ocr_result_file, "r", encoding="utf-8") as f:
             self._ocr_data = json.load(f)
-        Path(output_file).parent.mkdir(parents=True, exist_ok=True)
-
         items = self._iter_work_items(self._ocr_data, Path(image_base_dir), verbose)
-        resume_prev = None
-        out_path = Path(output_file)
-        if out_path.exists():
-            try:
-                with open(out_path, "r", encoding="utf-8") as f:
-                    resume_prev = json.load(f)
-            except Exception as e:
-                print(f"[WARNING] Could not read previous output ({e}); starting fresh")
-        return self._run_pipeline(items, output_file, resume_prev=resume_prev, verbose=verbose)
+        return self.run_pipeline(items, output_file, verbose=verbose)
 
 
-class ConsistencyAssessment(BaseExtraction):
+@dataclass
+class PairTask:
+    source_pdf: str
+    prob_idx: int
+    image_kind: str
+    img_idx: int
+    base_id: str
+    model: str
+    img: PILImage.Image
+    cerinta: str
+    barem_text: Optional[str]
+    cdl: str
+    nl: str
+
+
+class ConsistencyAssessment(BatchEmulator):
+    EMPTY_ITEMS_LABEL = "No (image, model) pairs with BOTH CDL and NL found. Run extract-descriptions first."
+    PROGRESS_LABEL = "Judging"
+
     def __init__(
         self,
         client: TogetherClient,
-        prompt: Prompt | list[Prompt] | None = None,
         *,
         prompts_dir: str = "prompts",
         max_workers: int = 10,
     ):
-        super().__init__(client, prompt or Prompt("cdl_nl_consistency", prompts_dir), max_workers=max_workers)
-        self._consistency_prompt = self.prompt if isinstance(self.prompt, Prompt) else self.prompt[0]
+        super().__init__(client, max_workers=max_workers)
+        self._consistency_prompt = Prompt("cdl_nl_consistency", prompts_dir)
         self._model: str = DEFAULT_CONSISTENCY_JUDGE_MODEL
         self._ocr_data: dict[str, list] = {}
 
-    def _iter_work_items(self, ocr_data: dict[str, list], image_base: Path, verbose: bool) -> list[dict]:
-        pairs: list[dict] = []
-        for doc_idx, source_pdf, prob_idx, cerinta, barem_text, kind, img_idx, entry in self._iter_figure_entries(ocr_data):
-            mrs = entry.get("model_results", {})
+    def _iter_work_items(self, ocr_data: dict[str, list], image_base: Path, verbose: bool) -> list[PairTask]:
+        pairs: list[PairTask] = []
+        for fe in walk_figure_entries(ocr_data):
+            mrs = fe.entry.get("model_results", {})
             if not mrs:
                 continue
-            base_id = f"d{doc_idx:04d}-p{prob_idx:04d}-{kind[0]}{img_idx:04d}"
             for m, res in mrs.items():
                 cdl = (res.get("cdl") or {}).get("description")
                 nl = (res.get("nl") or {}).get("natural_language")
                 if not cdl or not nl:
                     continue
-                page_img_path = _resolve_page_image(source_pdf, entry.get("page_number", 0), entry, image_base)
+                page_img_path = _resolve_page_image(fe.source_pdf, fe.entry.get("page_number", 0), fe.entry, image_base)
                 if not page_img_path:
                     if verbose:
-                        print(f"[SKIP] {base_id} {m}: no saved page image")
+                        print(f"[SKIP] {fe.base_id} {m}: no saved page image")
                     continue
-                fig_img = _crop_figure_to_image(source_pdf, entry, image_base)
+                fig_img = _crop_figure_to_image(fe.source_pdf, fe.entry, image_base)
                 if fig_img is None:
                     if verbose:
-                        print(f"[WARNING] Failed to crop {base_id} for judge")
+                        print(f"[WARNING] Failed to crop {fe.base_id} for judge")
                     continue
-                pairs.append({
-                    "source_pdf": source_pdf, "doc_idx": doc_idx, "prob_idx": prob_idx,
-                    "image_kind": kind, "img_idx": img_idx, "base_id": base_id, "model": m,
-                    "img": fig_img, "cerinta": cerinta, "barem_text": barem_text,
-                    "cdl": cdl, "nl": nl,
-                })
+                pairs.append(PairTask(
+                    source_pdf=fe.source_pdf, prob_idx=fe.prob_idx,
+                    image_kind=fe.image_kind, img_idx=fe.img_idx, base_id=fe.base_id, model=m,
+                    img=fig_img, cerinta=fe.cerinta, barem_text=fe.barem_text,
+                    cdl=cdl, nl=nl,
+                ))
         return pairs
 
-    def _empty_items_error(self) -> str:
-        return "No (image, model) pairs with BOTH CDL and NL found. Run extract-descriptions first."
-
-    def _plan_line(self, items: list) -> str:
+    def plan_line(self, items: list) -> str:
         return f"[DEBUG] {len(items)} (image,model) pairs to judge with {self._model}"
 
-    def _build_tasks(self, items: list, done: set) -> list:
-        return [p for p in items if (p["base_id"], p["model"]) not in done]
+    def build_tasks(self, items: list[PairTask], done: set) -> list[PairTask]:
+        return [p for p in items if (p.base_id, p.model) not in done]
 
-    def _done_key(self, task: dict) -> tuple:
-        return (task["base_id"], task["model"])
+    def task_id(self, task: PairTask) -> tuple:
+        return (task.base_id, task.model)
 
-    def _execute(self, task: dict) -> CompletionResult:
+    def execute(self, task: PairTask) -> CompletionResult:
         prompt = self._consistency_prompt.render({
-            "PROBLEM_TASK": task["cerinta"],
-            "CONTEXT": [task["barem_text"], None],
-            "CDL_DESCRIPTION": task["cdl"],
-            "NL_DESCRIPTION": task["nl"],
+            "PROBLEM_TASK": task.cerinta,
+            "CONTEXT": [task.barem_text, None],
+            "CDL_DESCRIPTION": task.cdl,
+            "NL_DESCRIPTION": task.nl,
         })
         return self.client.complete(
             self._model,
-            query=[prompt, task["img"]],
+            query=[prompt, task.img],
             response_schema=ConsistencyVerdict,
         )
 
-    def _merge(self, task: dict, result: CompletionResult) -> tuple[int, int]:
-        probs = self._ocr_data[task["source_pdf"]]
-        imgs = (probs[task["prob_idx"]].get("barem") or {}).get("imagini", []) if task["image_kind"] == "barem" else probs[task["prob_idx"]].get("imagini", [])
-        img = imgs[task["img_idx"]]
+    def merge_result(self, task: PairTask, result: CompletionResult) -> None:
+        probs = self._ocr_data[task.source_pdf]
+        imgs = (probs[task.prob_idx].get("barem") or {}).get("imagini", []) if task.image_kind == "barem" else probs[task.prob_idx].get("imagini", [])
+        img = imgs[task.img_idx]
         mrs = img.setdefault("model_results", {})
-        m = mrs.setdefault(task["model"], {})
-        if result.ok and result.content is not None:
-            content = result.content
-            m["consistency"] = {
-                "is_geometric": content.is_geometric,
-                "consistent": content.consistent,
-                "severity": content.severity,
-                "issues": content.issues,
-                "suggested_cdl": content.suggested_cdl,
-            }
-            return 1, 0
-        m["consistency"] = {"consistent": False, "severity": "major", "issues": ["API call failed"]}
-        return 0, 1
+        m = mrs.setdefault(task.model, {})
+        if not result.ok or result.content is None:
+            m["consistency"] = {"consistent": False, "severity": "major", "issues": ["API call failed"]}
+            return
+        content = result.content
+        m["consistency"] = {
+            "is_geometric": content.is_geometric,
+            "consistent": content.consistent,
+            "severity": content.severity,
+            "issues": content.issues,
+            "suggested_cdl": content.suggested_cdl,
+        }
 
-    def _progress_desc(self) -> str:
-        return "Judging"
-
-    def _summary_fields(self, items: list) -> dict[str, Any]:
+    def summary_extras(self, items: list) -> dict[str, Any]:
         return {"pairs": len(items), "model": self._model}
 
-    def _rehydrate_from_prev(self, prev: dict, done: set) -> None:
+    def rehydrate_from_prev(self, prev: dict, done: set) -> None:
         ocr_data = self._ocr_data
         doc_index_of = {pdf: i for i, pdf in enumerate(ocr_data.keys())}
         for src_key, probs in prev.items():
@@ -349,11 +379,8 @@ class ConsistencyAssessment(BaseExtraction):
         if p_pro.get("barem") and p_cur.get("barem"):
             _scan("barem", p_pro["barem"].get("imagini", []), p_cur["barem"].get("imagini", []))
 
-    def _dump_state(self) -> Any:
+    def dump_state(self) -> Any:
         return self._ocr_data
-
-    def _serialize_done_key(self, key: Any) -> Any:
-        return list(key)
 
     def run(
         self,
@@ -367,16 +394,6 @@ class ConsistencyAssessment(BaseExtraction):
         self._model = model or DEFAULT_CONSISTENCY_JUDGE_MODEL
         with open(enriched_file, "r", encoding="utf-8") as f:
             self._ocr_data = json.load(f)
-        Path(output_file).parent.mkdir(parents=True, exist_ok=True)
-
         items = self._iter_work_items(self._ocr_data, Path(image_base_dir), verbose)
-        resume_prev = None
-        out_path = Path(output_file)
-        if out_path.exists():
-            try:
-                with open(out_path, "r", encoding="utf-8") as f:
-                    resume_prev = json.load(f)
-            except Exception as e:
-                print(f"[WARNING] Could not read previous output ({e}); starting fresh")
-        return self._run_pipeline(items, output_file, resume_prev=resume_prev, verbose=verbose)
+        return self.run_pipeline(items, output_file, verbose=verbose)
 
