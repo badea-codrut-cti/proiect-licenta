@@ -215,14 +215,13 @@ def figure_filter_pipeline(
 
 
 def run_figure_filter(
-    ctx: typer.Context,
     input_folder: str,
     output_txt: str,
+    *,
     extensions: str = "pdf,docx,doc,pptx,ppt",
     use_temp_images: bool = False,
-):
-    verbose = ctx.meta.get("verbose", False)
-
+    verbose: bool = False,
+) -> dict:
     if not fitz:
         typer.secho(
             "Warning: PyMuPDF (fitz) not installed. Install with: pip install PyMuPDF\n"

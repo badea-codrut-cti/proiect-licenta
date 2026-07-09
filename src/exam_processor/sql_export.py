@@ -17,7 +17,6 @@ def generate_sql(
     ocr_result_file: str,
     output_sql: str,
     image_base_url: Optional[str] = None,
-    instruction_count: int = 0,
 ) -> tuple[int, int]:
     with open(ocr_result_file, "r", encoding="utf-8") as f:
         ocr_data: dict[str, list] = json.load(f)
@@ -52,7 +51,7 @@ def generate_sql(
             total_instructions = sum(
                 _count_cdl_instructions(img.get("cdl_description", ""))
                 for img in prob_images + barem_images
-            ) or instruction_count
+            )
 
             lines.append(
                 f"INSERT INTO problems (cerinta, explicatie, instruction_count) "

@@ -17,7 +17,8 @@ from exam_processor.utils.models import (
 )
 from exam_processor.figure_filter import run_figure_filter
 from exam_processor.ocr_batch import DocumentTuple, OcrExtractor
-from exam_processor.cdl_batch import DescriptionExtraction, ConsistencyAssessment
+from exam_processor.description_extraction import DescriptionExtraction
+from exam_processor.consistency import ConsistencyAssessment
 
 app = typer.Typer(help="Exam Processor CLI")
 
@@ -449,11 +450,11 @@ def figure_filter(
     geometric figures for further processing.
     """
     run_figure_filter(
-        ctx=ctx,
-        input_folder=str(input_folder),
-        output_txt=str(output_txt),
+        str(input_folder),
+        str(output_txt),
         extensions=extensions,
         use_temp_images=use_temp_images,
+        verbose=get_verbose(ctx),
     )
 
 
