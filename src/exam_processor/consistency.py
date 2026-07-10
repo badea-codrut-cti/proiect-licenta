@@ -45,7 +45,8 @@ class ConsistencyAssessment(BatchEmulator):
         max_workers: int = 10,
     ):
         super().__init__(client, max_workers=max_workers)
-        self._consistency_prompt = Prompt("cdl_nl_consistency", prompts_dir)
+        self._cdl_grammar_prompt = Prompt("cdl_grammar", prompts_dir)
+        self._consistency_prompt = Prompt("cdl_nl_consistency", prompts_dir, dependencies=[self._cdl_grammar_prompt])
         self._model: str = DEFAULT_CONSISTENCY_JUDGE_MODEL
         self._ocr_data: dict[str, list] = {}
 
@@ -90,7 +91,7 @@ class ConsistencyAssessment(BatchEmulator):
     def execute(self, task: PairTask) -> CompletionResult:
         prompt = self._consistency_prompt.render({
             "PROBLEM_TASK": task.cerinta,
-            "CONTEXT": [task.barem_text, None],
+            "CONTEXT": task.barem_text or "(none)",
             "CDL_DESCRIPTION": task.cdl,
             "NL_DESCRIPTION": task.nl,
         })

@@ -103,7 +103,8 @@ class DescriptionExtraction(BatchEmulator):
         max_workers: int = 10,
     ):
         super().__init__(client, max_workers=max_workers)
-        self._cdl_prompt = Prompt("image_to_cdl", prompts_dir)
+        self._cdl_grammar_prompt = Prompt("cdl_grammar", prompts_dir)
+        self._cdl_prompt = Prompt("image_to_cdl", prompts_dir, dependencies=[self._cdl_grammar_prompt])
         self._nl_prompt = Prompt("image_to_nl", prompts_dir)
         self.models: list[str] = []
         self._ocr_data: dict[str, list] = {}
@@ -129,8 +130,8 @@ class DescriptionExtraction(BatchEmulator):
     def build_tasks(self, items: list, done: set) -> list[FigureTask]:
         tasks: list[FigureTask] = []
         for fig in items:
-            prompt_cdl = self._cdl_prompt.render({"PROBLEM_TASK": fig["cerinta"], "CONTEXT": [fig["barem_text"], None]})
-            prompt_nl = self._nl_prompt.render({"PROBLEM_TASK": fig["cerinta"], "CONTEXT": [fig["barem_text"], None]})
+            prompt_cdl = self._cdl_prompt.render({"PROBLEM_TASK": fig["cerinta"], "CONTEXT": fig["barem_text"] or "(none)"})
+            prompt_nl = self._nl_prompt.render({"PROBLEM_TASK": fig["cerinta"], "CONTEXT": fig["barem_text"] or "(none)"})
             for model in self.models:
                 for task_kind, prompt, schema in (("cdl", prompt_cdl, CdlDescription), ("nl", prompt_nl, NlDescription)):
                     if (fig["base_id"], model, task_kind) not in done:

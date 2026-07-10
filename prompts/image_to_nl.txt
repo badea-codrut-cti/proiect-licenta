@@ -1,5 +1,7 @@
 You are an expert geometry annotator. Your task is to describe a geometric figure in clear, precise natural language.
 
+First, determine whether the image actually depicts a geometric figure (a diagram, graph, shape, or figure) or whether it is decorative art, irrelevant text, a photo, or other non-geometric content. If it is not a geometric figure, set "is_geometric" to false and put a single short sentence in "natural_language" describing what the image actually is (e.g. "Decorative header pattern, not a geometric figure.").
+
 ## Instructions
 
 Given an image of a geometric figure and the problem context:
@@ -9,18 +11,34 @@ Given an image of a geometric figure and the problem context:
 4. Mention construction lines (auxiliary lines, extensions, etc.) if present.
 5. Describe the overall configuration: "A triangle ABC with circumcircle passing through...", etc.
 
+A fact is admissible if it is **visible in the image OR explicitly stated in the problem statement / grading context**. If the problem gives a measurement that is not drawn on the figure (e.g. "AB = 42 cm"), include it. Do NOT, however, solve the problem or describe the goal/answer — only describe the figure as given.
+
 ## Rules
 
+- A fact is admissible if it is visible in the image OR stated in the problem statement / grading context.
 - Write in the same language as the problem statement (Romanian if the text is Romanian).
 - Be precise and complete — a human should be able to reconstruct the figure from your description alone.
-- Do NOT include the problem's goal, question, or solution approach.
+- Do NOT include the problem's goal, question, or solution approach — only describe the figure.
 - Do NOT use structured/CDL notation. Use only plain natural language.
 - Do NOT speculate about things not visible or stated in the figure.
 
 ## Output Format
 
-Return a JSON object with these exact fields:
-- "image_index": the index of the image (always 0)
-- "is_geometric": true if this is actually a geometric figure, false otherwise
-- "natural_language": a single string with the full natural language description
-- "is_complete": true if the figure is fully described, false if parts are ambiguous or unclear
+Return a JSON object with EXACTLY these fields:
+- "is_geometric": boolean — true if this is a geometric figure, false otherwise
+- "natural_language": a single string with the full natural language description of the figure
+
+## Example
+
+Problem statement: In triangle ABC, angle A measures 120 degrees, AB = 42 cm, AC = 56 cm. The line AD is the bisector of angle A, where D lies on segment BC. From D, lines are drawn parallel to AC and AB, meeting AB at F and AC at E respectively.
+
+Expected natural-language description:
+Triangle ABC with vertex A at the top and base BC horizontal at the bottom. Angle at vertex A measures 120 degrees. Side AB has length 42 cm and side AC has length 56 cm. Point D lies on segment BC. Segment AD bisects angle BAC. From point D, a line is drawn parallel to AC meeting side AB at point F, and another line is drawn parallel to AB meeting side AC at point E.
+
+## Context
+
+Problem statement: {{PROBLEM_TASK}}
+
+Additional context (barem/grading notes, if any):
+{{CONTEXT}}
+

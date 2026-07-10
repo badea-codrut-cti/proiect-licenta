@@ -1,12 +1,23 @@
+import re
 from pathlib import Path
 from typing import Optional
 
+_INCLUDE_RE = re.compile(r"\{\{>\s*([A-Za-z0-9_]+)\s*\}\}")
+
 
 class Prompt:
-    def __init__(self, name: str, prompts_dir: str = "prompts", values: Optional[dict] = None):
+    def __init__(
+        self,
+        name: str,
+        prompts_dir: str = "prompts",
+        values: Optional[dict] = None,
+        *,
+        dependencies: Optional[list["Prompt"]] = None,
+    ):
         self.name = name
         self.prompts_dir = prompts_dir
         self.values = values or {}
+        self._dep_by_name = {dep.name: dep for dep in (dependencies or [])}
 
     @property
     def path(self) -> Path:
@@ -17,7 +28,7 @@ class Prompt:
         return self.path.read_text(encoding="utf-8")
 
     def render(self, values: Optional[dict] = None) -> str:
-        template = self.template
+        template = self._expand_includes(self.template)
         merged = {**self.values, **(values or {})}
         for key, raw in merged.items():
             occ: Optional[list[object]] = list(raw) if isinstance(raw, list) else None
@@ -41,4 +52,18 @@ class Prompt:
                 cursor = idx + len(text)
                 slot += 1
         return template
+
+    def _expand_includes(self, template: str, _stack: Optional[set] = None) -> str:
+        stack = _stack if _stack is not None else set()
+
+        def _replace(match: re.Match) -> str:
+            partial_name = match.group(1)
+            if partial_name in stack:
+                return f"{{{{<!-- cyclic include: {partial_name} -->}}}}"
+            dep = self._dep_by_name.get(partial_name)
+            if dep is None:
+                return f"{{{{<!-- missing partial: {partial_name} -->}}}}"
+            return self._expand_includes(dep.template.rstrip("\n"), stack | {partial_name})
+
+        return _INCLUDE_RE.sub(_replace, template)
 
